@@ -69,13 +69,16 @@ _ccs_name() {
   if [[ -z "$CC_TAB" ]]; then
     print -u2 "ccs: \$CC_TAB is unset — is the cc_tabs daemon running?"; return 1
   fi
-  local dir="$HOME/.config/cc-tabs/by-name"; mkdir -p "$dir"
+  local cfg="$HOME/.config/cc-tabs"; mkdir -p "$cfg/by-name"
   if (( $# == 0 )); then
-    [[ -r "$dir/$CC_TAB" ]] && print -r -- "$(<"$dir/$CC_TAB")" || print -- "<unnamed>"
+    [[ -r "$cfg/by-name/$CC_TAB" ]] && print -r -- "$(<"$cfg/by-name/$CC_TAB")" || print -- "<unnamed>"
     return 0
   fi
   local name="$*"
-  print -r -- "$name" > "$dir/$CC_TAB"
+  print -r -- "$name" > "$cfg/by-name/$CC_TAB"
+  # Mirror onto the session so the label follows it across a restore/resume.
+  local sid=""; [[ -r "$cfg/by-tab/$CC_TAB" ]] && sid="$(<"$cfg/by-tab/$CC_TAB")"
+  if [[ -n "$sid" ]]; then mkdir -p "$cfg/by-session"; print -r -- "$name" > "$cfg/by-session/$sid"; fi
   printf '\033]0;%s\007' "$name"      # instant feedback; daemon makes it sticky
   print -r -- "named this tab: $name"
 }
@@ -128,13 +131,18 @@ _ccs_restore() {
   [[ -r "$reg" ]] || { print -u2 "ccs: no registry yet"; return 1; }
   local live=""; [[ -r "$cfg/live" ]] && live="$(<"$cfg/live")"
   local uuid sid cwd name n=0
-  for uuid in ${(f)"$(jq -r 'keys[]' "$reg" 2>/dev/null)"}; do
+  local -A seen                                                      # de-dupe by session id
+  # Restore in saved left-to-right order so the rebuilt window matches the old one.
+  for uuid in ${(f)"$(jq -r 'to_entries | sort_by(.value.tab_index) | .[].key' "$reg" 2>/dev/null)"}; do
     [[ -f "$cfg/by-tab/$uuid" ]] || continue                         # resumable only
     if (( ! all )) && print -r -- "$live" | grep -qx "$uuid"; then continue; fi  # skip live
     sid="$(<"$cfg/by-tab/$uuid")"
+    [[ -n "$sid" ]] || continue
+    [[ -n "${seen[$sid]}" ]] && continue                            # one tab per session
+    seen[$sid]=1
     cwd="$(jq -r --arg u "$uuid" '.[$u].cwd // ""' "$reg")"
     name="$(jq -r --arg u "$uuid" '.[$u].name // ""' "$reg")"
-    [[ -n "$sid" && -d "$cwd" ]] || continue
+    [[ -d "$cwd" ]] || continue
     local shcmd="cd ${(q)cwd} && claude --resume ${sid} ${CC_ARGS}"
     if (( dry )); then
       print -r -- "would restore  ${name:-—}  [$uuid]  ${cwd/#$HOME/~}"
@@ -174,7 +182,9 @@ _ccs_prune() {
     sid="$(<"$f")"; uuid="${f:t}"
     local matches=($proj/*/"$sid.jsonl")
     if [[ -z "$sid" || ${#matches} -eq 0 ]]; then
-      rm -f "$f" "$cfg/by-name/$uuid"; (( n++ ))
+      rm -f "$f" "$cfg/by-name/$uuid"
+      [[ -n "$sid" ]] && rm -f "$cfg/by-session/$sid"
+      (( n++ ))
     fi
   done
   print -r -- "pruned $n stale mapping(s)"

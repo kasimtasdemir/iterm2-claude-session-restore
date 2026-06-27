@@ -160,7 +160,10 @@ resumable session.
 macOS only restores windows on a clean app **quit** (⌘Q), not when you close a
 single window. If you close a window by accident, `ccs restore` rebuilds a tab
 for each resumable session (in its folder, resuming its conversation) without
-needing to quit iTerm2. `ccs restore --all` also re-opens ones already live.
+needing to quit iTerm2. It rebuilds in the saved left-to-right order, restores
+each tab's **name** (labels follow the session, so a resumed tab gets its label
+back within a few seconds), and opens **one tab per session** even if the
+registry has duplicate entries. `ccs restore --all` also re-opens ones already live.
 
 ## Verify it works
 

@@ -221,6 +221,34 @@ if command -v zsh >/dev/null; then
   else
     no "ccs prune behaved unexpectedly"
   fi
+
+  # restore de-dupes two registry entries mapping to the same session id
+  SD="$(mktemp -d)"; mkdir -p "$SD/.config/cc-tabs/by-tab"
+  printf '{"D1":{"cwd":"/tmp","name":"x","tab_index":0},"D2":{"cwd":"/tmp","name":"x","tab_index":1}}' \
+    > "$SD/.config/cc-tabs/registry.json"
+  printf 'sameSID' > "$SD/.config/cc-tabs/by-tab/D1"
+  printf 'sameSID' > "$SD/.config/cc-tabs/by-tab/D2"
+  rd="$(ZRUN "$SD" "" "ccs restore -n --all")"
+  echo "$rd" | grep -q 'restored 1 tab' \
+    && ok "ccs restore de-dupes the same session id (1, not 2)" \
+    || { no "dedupe failed:"; echo "$rd" | sed 's/^/      /'; }
+
+  # restore orders by tab_index (ZZZ index 0 before AAA index 1, despite uuid order)
+  SO="$(mktemp -d)"; mkdir -p "$SO/.config/cc-tabs/by-tab"
+  printf '{"ZZZ":{"cwd":"/tmp","name":"first","tab_index":0},"AAA":{"cwd":"/tmp","name":"second","tab_index":1}}' \
+    > "$SO/.config/cc-tabs/registry.json"
+  printf 's1' > "$SO/.config/cc-tabs/by-tab/ZZZ"; printf 's2' > "$SO/.config/cc-tabs/by-tab/AAA"
+  ro="$(ZRUN "$SO" "" "ccs restore -n")"
+  [ "$(echo "$ro" | grep -oE 'ZZZ|AAA' | head -1)" = "ZZZ" ] \
+    && ok "ccs restore rebuilds in saved tab_index order" \
+    || { no "ordering wrong:"; echo "$ro" | sed 's/^/      /'; }
+
+  # ccs name mirrors the label onto the session (so resume carries it)
+  SM="$(mktemp -d)"; mkdir -p "$SM/.config/cc-tabs/by-tab"
+  printf 'sessZ' > "$SM/.config/cc-tabs/by-tab/tabM"
+  ZRUN "$SM" "tabM" "ccs name 'follow me'" >/dev/null
+  [ "$(cat "$SM/.config/cc-tabs/by-session/sessZ" 2>/dev/null)" = "follow me" ] \
+    && ok "ccs name mirrors label to by-session" || no "by-session mirror failed"
 else
   skip "zsh not found"
 fi

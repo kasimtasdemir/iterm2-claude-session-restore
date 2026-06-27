@@ -59,4 +59,18 @@ with tempfile.TemporaryDirectory() as d:
     check("U" not in reg2, "unclaimed + no session pruned")
     check(not os.path.exists(ccd.by_name_path("U")), "pruned tab's by-name file removed")
 
+# --- resolve_label: explicit tab label > session-carried label > native -----
+with tempfile.TemporaryDirectory() as d:
+    ccd.BY_TAB_DIR = os.path.join(d, "by-tab")
+    ccd.BY_NAME_DIR = os.path.join(d, "by-name")
+    ccd.BY_SESSION_DIR = os.path.join(d, "by-session")
+    for p in (ccd.BY_TAB_DIR, ccd.BY_NAME_DIR, ccd.BY_SESSION_DIR):
+        os.makedirs(p)
+    open(ccd.by_tab_path("T1"), "w").write("S1")        # tab T1 -> session S1
+    open(ccd.by_session_path("S1"), "w").write("beta")  # session carries "beta"
+    check(ccd.resolve_label("T1", "native") == "beta", "session label used when tab has none")
+    open(ccd.by_name_path("T1"), "w").write("alpha")    # explicit tab label
+    check(ccd.resolve_label("T1", "native") == "alpha", "explicit tab label beats session label")
+    check(ccd.resolve_label("T2", "native") == "native", "no labels -> native title")
+
 sys.exit(1 if fails else 0)

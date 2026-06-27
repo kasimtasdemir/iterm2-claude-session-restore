@@ -47,6 +47,7 @@ import iterm2
 CFG_DIR = os.path.expanduser("~/.config/cc-tabs")
 BY_TAB_DIR = os.path.join(CFG_DIR, "by-tab")          # <uuid> -> cc session id (hook writes)
 BY_NAME_DIR = os.path.join(CFG_DIR, "by-name")        # <uuid> -> human label (`ccs name` writes)
+BY_SESSION_DIR = os.path.join(CFG_DIR, "by-session")  # <session-id> -> label (follows a session across tabs)
 REGISTRY_PATH = os.path.join(CFG_DIR, "registry.json")  # daemon-owned reconciliation metadata
 LIVE_PATH = os.path.join(CFG_DIR, "live")             # uuids of currently-open tabs (one per line)
 
@@ -100,6 +101,43 @@ def read_name_file(tab_uuid: str) -> str:
             return f.read().strip()
     except (FileNotFoundError, OSError):
         return ""
+
+
+def read_session_id(tab_uuid: str) -> str:
+    """The Claude session id mapped to this tab (hook-written), or '' if none."""
+    try:
+        with open(by_tab_path(tab_uuid)) as f:
+            return f.read().strip()
+    except (FileNotFoundError, OSError):
+        return ""
+
+
+def by_session_path(sid: str) -> str:
+    return os.path.join(BY_SESSION_DIR, sid)
+
+
+def read_session_name(sid: str) -> str:
+    """A label that follows a session across tabs (so resume re-applies the name)."""
+    if not sid:
+        return ""
+    try:
+        with open(by_session_path(sid)) as f:
+            return f.read().strip()
+    except (FileNotFoundError, OSError):
+        return ""
+
+
+def write_session_name(sid: str, name: str) -> None:
+    os.makedirs(BY_SESSION_DIR, exist_ok=True)
+    tmp = by_session_path(sid) + ".tmp"
+    with open(tmp, "w") as f:
+        f.write(name)
+    os.replace(tmp, by_session_path(sid))
+
+
+def resolve_label(tab_uuid: str, native: str) -> str:
+    """Effective label: explicit tab label > the session's carried label > native title."""
+    return read_name_file(tab_uuid) or read_session_name(read_session_id(tab_uuid)) or native
 
 
 def real_title(cwd: str, title: str) -> str:
@@ -274,8 +312,8 @@ async def provision(app, session, mode: str, registry: dict, claimed: set[str],
         await session.async_set_variable("user.cc_tab", tab_uuid)
     except Exception:
         pass
-    # Effective label: an explicit `ccs name` label wins over a native tab title.
-    label = read_name_file(tab_uuid) or name
+    # Effective label: explicit tab label > the session's carried label > native.
+    label = resolve_label(tab_uuid, name)
     registry[tab_uuid] = {
         "cwd": cwd, "profile": profile, "tab_index": tab_index,
         "name": label, "updated_at": now(),
@@ -324,13 +362,18 @@ async def refresh_loop(app, registry: dict, interval: float = 5.0) -> None:
                         if tab_uuid not in registry:
                             continue
                         cwd = registry[tab_uuid].get("cwd", "")
-                        title = real_title(cwd, await get_tab_var(tab, "title"))
-                        label = read_name_file(tab_uuid) or title
+                        native = real_title(cwd, await get_tab_var(tab, "title"))
+                        label = resolve_label(tab_uuid, native)
                         if label and label != registry[tab_uuid].get("name"):
                             registry[tab_uuid]["name"] = label
                             registry[tab_uuid]["updated_at"] = now()
                             changed = True
                             asyncio.create_task(apply_title(tab, label))
+                        # Mirror the label onto the session so a future resume
+                        # (in any tab) re-applies it — fixes names lost on restore.
+                        sid = read_session_id(tab_uuid)
+                        if label and sid and read_session_name(sid) != label:
+                            write_session_name(sid, label)
         except Exception:
             pass
         if changed:
@@ -346,6 +389,7 @@ async def refresh_loop(app, registry: dict, interval: float = 5.0) -> None:
 async def main(connection):
     os.makedirs(BY_TAB_DIR, exist_ok=True)
     os.makedirs(BY_NAME_DIR, exist_ok=True)
+    os.makedirs(BY_SESSION_DIR, exist_ok=True)
     app = await iterm2.async_get_app(connection)
     registry = load_registry()
     claimed: set[str] = set()
