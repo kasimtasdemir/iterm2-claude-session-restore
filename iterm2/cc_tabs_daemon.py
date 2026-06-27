@@ -37,6 +37,8 @@ import asyncio
 import json
 import os
 import shlex
+import signal
+import subprocess
 import time
 import uuid
 
@@ -52,6 +54,9 @@ BY_SESSION_DIR = os.path.join(CFG_DIR, "by-session")  # <session-id> -> label (f
 REGISTRY_PATH = os.path.join(CFG_DIR, "registry.json")  # daemon-owned reconciliation metadata
 LIVE_PATH = os.path.join(CFG_DIR, "live")             # uuids of currently-open tabs (one per line)
 RESTORE_REQ_PATH = os.path.join(CFG_DIR, "restore.req")  # `ccs restore` drops a JSON list here
+PID_PATH = os.path.join(CFG_DIR, "daemon.pid")        # pid of the live single instance
+
+DAEMON_SCRIPT = os.path.basename(__file__)            # matched to find sibling instances
 
 # Sessions already handled this run (guards startup-enumeration vs. new-session monitor).
 PROVISIONED: set[str] = set()
@@ -325,6 +330,46 @@ def prune(registry: dict, claimed: set[str]) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Single-instance guard
+# ---------------------------------------------------------------------------
+# Several daemons must never run at once. Each one runs its own refresh_loop, so
+# they race to consume `restore.req` (a stale instance can win and silently drop
+# the request -> `ccs restore` "does nothing") and they fight over the registry,
+# titles, and CC_TAB stamping. Duplicates accumulate from manual relaunches,
+# script reloads, or a partial quit. On startup we become the sole authority and
+# terminate any predecessor, then record our pid.
+def terminate_other_instances() -> None:
+    me, parent = os.getpid(), os.getppid()
+    try:
+        out = subprocess.run(["pgrep", "-f", DAEMON_SCRIPT],
+                             capture_output=True, text=True, timeout=5).stdout
+    except Exception:
+        return
+    for token in out.split():
+        try:
+            pid = int(token)
+        except ValueError:
+            continue
+        if pid in (me, parent):     # never signal ourselves or our launcher
+            continue
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except OSError:
+            pass
+
+
+def write_pidfile() -> None:
+    try:
+        os.makedirs(CFG_DIR, exist_ok=True)
+        tmp = PID_PATH + ".tmp"
+        with open(tmp, "w") as f:
+            f.write(str(os.getpid()))
+        os.replace(tmp, PID_PATH)
+    except OSError:
+        pass
+
+
+# ---------------------------------------------------------------------------
 # Provisioning
 # ---------------------------------------------------------------------------
 async def provision(app, session, mode: str, registry: dict, claimed: set[str],
@@ -501,6 +546,10 @@ async def refresh_loop(app, connection, registry: dict, interval: float = 5.0) -
 # Entry point
 # ---------------------------------------------------------------------------
 async def main(connection):
+    # Be the only daemon: kill any predecessor before touching shared state, so
+    # we don't race them over restore.req / the registry / titles.
+    terminate_other_instances()
+    write_pidfile()
     os.makedirs(BY_TAB_DIR, exist_ok=True)
     os.makedirs(BY_NAME_DIR, exist_ok=True)
     os.makedirs(BY_SESSION_DIR, exist_ok=True)

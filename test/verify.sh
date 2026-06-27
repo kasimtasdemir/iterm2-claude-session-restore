@@ -63,6 +63,20 @@ fi | while read -r line; do
   esac
 done
 
+# Single-instance guard: duplicate daemons race over restore.req / the registry,
+# which is what made `ccs restore` silently no-op. main() must supersede them.
+python3 - "$DAEMON" <<'PY' && ok "single-instance guard wired into main()" || no "single-instance guard missing from main()"
+import ast, sys
+tree = ast.parse(open(sys.argv[1]).read())
+defs = {n.name for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
+need = {"terminate_other_instances", "write_pidfile"}
+main = next((n for n in ast.walk(tree)
+             if isinstance(n, ast.AsyncFunctionDef) and n.name == "main"), None)
+called = {n.func.id for n in ast.walk(main) if isinstance(n, ast.Call)
+          and isinstance(n.func, ast.Name)} if main else set()
+sys.exit(0 if need <= defs and need <= called else 1)
+PY
+
 # ---------------------------------------------------------------------------
 hdr "2. Plugin + marketplace manifests"
 if command -v claude >/dev/null; then
