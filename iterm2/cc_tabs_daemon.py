@@ -36,6 +36,7 @@ Prereqs for reboot survival
 import asyncio
 import json
 import os
+import shlex
 import time
 import uuid
 
@@ -50,6 +51,7 @@ BY_NAME_DIR = os.path.join(CFG_DIR, "by-name")        # <uuid> -> human label (`
 BY_SESSION_DIR = os.path.join(CFG_DIR, "by-session")  # <session-id> -> label (follows a session across tabs)
 REGISTRY_PATH = os.path.join(CFG_DIR, "registry.json")  # daemon-owned reconciliation metadata
 LIVE_PATH = os.path.join(CFG_DIR, "live")             # uuids of currently-open tabs (one per line)
+RESTORE_REQ_PATH = os.path.join(CFG_DIR, "restore.req")  # `ccs restore` drops a JSON list here
 
 # Sessions already handled this run (guards startup-enumeration vs. new-session monitor).
 PROVISIONED: set[str] = set()
@@ -342,13 +344,87 @@ async def activate(session, tab_uuid: str, mode: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Daemon-driven restore: `ccs restore` writes a JSON request; the daemon owns the
+# whole operation so identity, title, and the resume command never race with the
+# shell (the bug where `export CC_TAB` got typed into Claude instead of bash).
+# ---------------------------------------------------------------------------
+async def _send_resume(session, tab_uuid: str, cwd: str) -> None:
+    """Once the new tab has a live shell, export CC_TAB and resume via `cc`."""
+    if not await wait_for_shell(session):
+        return
+    if not is_shell_job(await get_var(session, "jobName")):
+        return
+    cd = f"cd {shlex.quote(cwd)} && " if cwd else ""
+    try:
+        # Leading spaces keep these out of history (HIST_IGNORE_SPACE). `cc`
+        # resumes via the by-tab mapping and applies CC_ARGS.
+        await session.async_send_text(f" export CC_TAB={tab_uuid}\n {cd}cc\n")
+    except Exception:
+        pass
+
+
+async def process_restore(app, connection, registry: dict, entries: list) -> None:
+    for e in entries:
+        if not isinstance(e, dict):
+            continue
+        tab_uuid = e.get("uuid")
+        sid = e.get("sid")
+        cwd = e.get("cwd", "")
+        name = e.get("name", "")
+        if not (tab_uuid and sid):
+            continue
+        try:
+            win = app.current_terminal_window
+            if win is None:
+                win = await iterm2.Window.async_create(connection)
+                tab = win.tabs[0] if win.tabs else None
+            else:
+                tab = await win.async_create_tab()
+            if tab is None:
+                continue
+            session = tab.current_session
+            if session is None:
+                continue
+            # Claim the new session so our own NewSessionMonitor provisioning skips
+            # it (no await between create and this add -> no provision can sneak in).
+            PROVISIONED.add(session.session_id)
+            await session.async_set_variable("user.cc_tab", tab_uuid)
+            registry[tab_uuid] = {**registry.get(tab_uuid, {}),
+                                  "cwd": cwd, "name": name, "updated_at": now()}
+            if name:
+                asyncio.create_task(apply_title(tab, name))
+            asyncio.create_task(_send_resume(session, tab_uuid, cwd))
+        except Exception:
+            pass
+    save_registry(registry)
+
+
+async def consume_restore_request(app, connection, registry: dict) -> None:
+    """Pick up and execute a pending `ccs restore` request, if any."""
+    try:
+        if not os.path.exists(RESTORE_REQ_PATH):
+            return
+        with open(RESTORE_REQ_PATH) as f:
+            entries = json.load(f)
+        os.remove(RESTORE_REQ_PATH)
+        if isinstance(entries, list):
+            await process_restore(app, connection, registry, entries)
+    except Exception:
+        try:
+            os.remove(RESTORE_REQ_PATH)
+        except OSError:
+            pass
+
+
+# ---------------------------------------------------------------------------
 # Live label refresh: catch renames (native Edit-Tab-Title or `ccs name`) without a
 # restart, and keep each tab's title sticky.
 # ---------------------------------------------------------------------------
-async def refresh_loop(app, registry: dict, interval: float = 5.0) -> None:
+async def refresh_loop(app, connection, registry: dict, interval: float = 5.0) -> None:
     prev_live = None
     while True:
         await asyncio.sleep(interval)
+        await consume_restore_request(app, connection, registry)
         changed = False
         live: set[str] = set()
         try:
@@ -416,8 +492,8 @@ async def main(connection):
         save_registry(registry)
     write_live(claimed)
 
-    # Keep labels + the live set fresh in the background.
-    asyncio.create_task(refresh_loop(app, registry))
+    # Keep labels + the live set fresh, and service `ccs restore` requests.
+    asyncio.create_task(refresh_loop(app, connection, registry))
 
     # Pass 2: anything created from now on is a genuinely new tab.
     async with iterm2.NewSessionMonitor(connection) as mon:

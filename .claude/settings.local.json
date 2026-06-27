@@ -5,7 +5,9 @@
       "Read(//tmp/**)",
       "Bash(git add *)",
       "Bash(git commit -q -m 'install: detect iTerm2 Shell Integration and offer one-step install *)",
-      "Bash(git push *)"
+      "Bash(git push *)",
+      "Bash(./venv-iterm/bin/python -m py_compile iterm2/cc_tabs_daemon.py)",
+      "Bash(zsh -fc \"source ./shell/cc.zsh; echo ok\")"
     ]
   }
 }

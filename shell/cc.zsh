@@ -132,6 +132,7 @@ _ccs_restore() {
   local live=""; [[ -r "$cfg/live" ]] && live="$(<"$cfg/live")"
   local uuid sid cwd name n=0
   local -A seen                                                      # de-dupe by session id
+  local tmpf="$(mktemp)"
   # Restore in saved left-to-right order so the rebuilt window matches the old one.
   for uuid in ${(f)"$(jq -r 'to_entries | sort_by(.value.tab_index) | .[].key' "$reg" 2>/dev/null)"}; do
     [[ -f "$cfg/by-tab/$uuid" ]] || continue                         # resumable only
@@ -143,35 +144,25 @@ _ccs_restore() {
     cwd="$(jq -r --arg u "$uuid" '.[$u].cwd // ""' "$reg")"
     name="$(jq -r --arg u "$uuid" '.[$u].name // ""' "$reg")"
     [[ -d "$cwd" ]] || continue
-    local shcmd="cd ${(q)cwd} && claude --resume ${sid} ${CC_ARGS}"
     if (( dry )); then
       print -r -- "would restore  ${name:-—}  [$uuid]  ${cwd/#$HOME/~}"
     else
-      _ccs_open_tab "$shcmd" "$name"
+      jq -nc --arg uuid "$uuid" --arg sid "$sid" --arg cwd "$cwd" --arg name "$name" \
+        '{uuid:$uuid,sid:$sid,cwd:$cwd,name:$name}' >> "$tmpf"
     fi
     (( n++ ))
   done
-  print -r -- "${dry:+(dry-run) }restored $n tab(s)"
-}
-
-_ccs_open_tab() {
-  /usr/bin/osascript - "$1" "$2" <<'APPLESCRIPT'
-on run argv
-  set theCmd to item 1 of argv
-  set theName to item 2 of argv
-  tell application "iTerm2"
-    if (count of windows) = 0 then
-      create window with default profile
-    else
-      tell current window to create tab with default profile
-    end if
-    tell current session of current window
-      write text theCmd
-      if theName is not "" then set name to theName
-    end tell
-  end tell
-end run
-APPLESCRIPT
+  if (( dry )); then
+    rm -f "$tmpf"
+    print -r -- "would restore $n tab(s)"
+    return 0
+  fi
+  # Hand the work to the daemon: it owns tab identity, so the resume command goes
+  # into a real shell (CC_TAB lands in the env, the hook tags the session, the
+  # name comes back) instead of racing into Claude.
+  (( n > 0 )) && jq -s '.' "$tmpf" > "$cfg/restore.req"
+  rm -f "$tmpf"
+  print -r -- "queued $n tab(s); the daemon will open them in a few seconds."
 }
 
 _ccs_prune() {

@@ -199,7 +199,7 @@ if command -v zsh >/dev/null; then
 
   # ccs restore (default) -> only BBB (resumable, not live); CCC skipped (no session)
   r1="$(ZRUN "$SB" "" "ccs restore -n")"
-  if echo "$r1" | grep -q 'restored 1 tab' && echo "$r1" | grep -q 'BBB' && ! echo "$r1" | grep -q 'AAA'; then
+  if echo "$r1" | grep -q 'would restore 1 tab' && echo "$r1" | grep -q 'BBB' && ! echo "$r1" | grep -q 'AAA'; then
     ok "ccs restore -n rebuilds only closed+resumable (BBB), skips live & no-session"
   else
     no "ccs restore default selection wrong:"; echo "$r1" | sed 's/^/      /'
@@ -207,8 +207,17 @@ if command -v zsh >/dev/null; then
 
   # ccs restore --all -> AAA + BBB
   r2="$(ZRUN "$SB" "" "ccs restore -n --all")"
-  echo "$r2" | grep -q 'restored 2 tab' && ok "ccs restore --all includes live tabs (2)" \
+  echo "$r2" | grep -q 'would restore 2 tab' && ok "ccs restore --all includes live tabs (2)" \
     || { no "ccs restore --all wrong:"; echo "$r2" | sed 's/^/      /'; }
+
+  # ccs restore (non-dry) writes a valid restore.req for the daemon
+  ZRUN "$SB" "" "ccs restore" >/dev/null
+  req="$SB/.config/cc-tabs/restore.req"
+  if [ -f "$req" ] && jq -e '.[0].sid == "sidB" and (length == 1)' "$req" >/dev/null 2>&1; then
+    ok "ccs restore writes a valid restore.req (1 entry, BBB's session)"
+  else
+    no "ccs restore did not write a valid request:"; cat "$req" 2>/dev/null | sed 's/^/      /'
+  fi
 
   # ccs prune -> drops mapping whose session .jsonl is gone, keeps existing
   SP="$(mktemp -d)"; mkdir -p "$SP/.config/cc-tabs/by-tab" "$SP/.config/cc-tabs/by-name" "$SP/.claude/projects/proj"
@@ -229,7 +238,7 @@ if command -v zsh >/dev/null; then
   printf 'sameSID' > "$SD/.config/cc-tabs/by-tab/D1"
   printf 'sameSID' > "$SD/.config/cc-tabs/by-tab/D2"
   rd="$(ZRUN "$SD" "" "ccs restore -n --all")"
-  echo "$rd" | grep -q 'restored 1 tab' \
+  echo "$rd" | grep -q 'would restore 1 tab' \
     && ok "ccs restore de-dupes the same session id (1, not 2)" \
     || { no "dedupe failed:"; echo "$rd" | sed 's/^/      /'; }
 
