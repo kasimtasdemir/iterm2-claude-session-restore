@@ -1,6 +1,9 @@
 # cc-tabs
 
-Resume the **right Claude Code session in each iTerm2 tab after a reboot.**
+An **iTerm2 ⇄ Claude Code session manager.** Every tab keeps a stable identity
+and remembers its Claude Code session, so you can **resume the right session in
+each tab after a reboot**, name tabs, list them, and rebuild a closed window —
+via `cc` and the `ccs` command.
 
 macOS restores your iTerm2 windows and tabs, but the processes inside them are
 gone — you come back to bare shells. `cc-tabs` gives every tab a stable identity,
@@ -119,15 +122,29 @@ Because resume uses the exact saved session id (not `--continue`, i.e. "most
 recent in this folder"), **two tabs open in the same folder each resume their own
 session** — which is the whole reason the per-tab mapping exists.
 
+### Commands
+
+`cc` is the hot path; everything else lives under the `ccs` umbrella so there's
+one thing to remember:
+
+| Command | What it does |
+|---|---|
+| `cc [claude args]` | Resume **this tab's** session (fresh if none). Forwards args to `claude`. |
+| `ccs ls` | List known tabs: label · state (`live`/`resumable`/`closed`) · cwd. |
+| `ccs name [label]` | Label this tab (no arg prints the current label). |
+| `ccs restore [--all]` | Rebuild **resumable** tabs — recover a closed window. By default skips tabs that are already open; `--all` includes them; `-n` dry-runs. |
+| `ccs status` | This tab's `CC_TAB`, label, and mapped session id. |
+| `ccs prune` | Drop on-disk mappings whose Claude session no longer exists. |
+
 ### Naming tabs
 
 Same-folder tabs are otherwise told apart only by their left-to-right position,
 which can shuffle. Giving a tab a **name** makes its identity stable across
 reorders and reboots. Two ways, and they cooperate:
 
-- **`cctab "my label"`** — labels the current tab. The daemon shows it as a
+- **`ccs name "my label"`** — labels the current tab. The daemon shows it as a
   sticky iTerm2 tab title (it overrides your theme's auto cwd-title) and stores
-  it durably. `cctab` with no argument prints the current label.
+  it durably.
 - **iTerm2 → Edit Tab Title** (right-click the tab) — the daemon reads this
   natively. A title that's just the folder name is treated as "unnamed" and
   ignored, so only labels you actually choose count.
@@ -137,6 +154,13 @@ position only when there's no name — so unnamed tabs behave exactly as before.
 Renames (either method) are picked up live within a few seconds. When you close
 a tab, its entry is pruned on the next daemon start unless it still has a
 resumable session.
+
+### Recovering a closed window
+
+macOS only restores windows on a clean app **quit** (⌘Q), not when you close a
+single window. If you close a window by accident, `ccs restore` rebuilds a tab
+for each resumable session (in its folder, resuming its conversation) without
+needing to quit iTerm2. `ccs restore --all` also re-opens ones already live.
 
 ## Verify it works
 
@@ -183,7 +207,7 @@ sources you trust. The hook writes exactly one file per tab under
   once the shell is alive.
 - **Two sessions in the same folder, swapped after reboot.** Only happens if
   `user.cc_tab` was lost *and* tab order changed *and* the tabs are unnamed.
-  Name them with `cctab` (or different profiles) and the swap can't happen.
+  Name them with `ccs name` (or different profiles) and the swap can't happen.
 - **Closing a window vs. quitting iTerm2.** macOS window restoration snapshots on
   a clean app **quit** (⌘Q) and replays on relaunch. Closing a single window is
   treated as intentional disposal — the app stays running, so there's no snapshot
@@ -191,7 +215,7 @@ sources you trust. The hook writes exactly one file per tab under
   disk (`claude --resume <id>` works, and resumable entries stay in the registry);
   only the auto-restore of that window's layout is lost. Use ⌘Q, not window-close,
   if you want a layout back.
-- **`cctab` label latency.** A new label prints instantly but becomes a sticky
+- **`ccs name` label latency.** A new label prints instantly but becomes a sticky
   tab title on the daemon's next refresh tick (~5s), not the same instant.
 - **No Shell Integration.** Without it the daemon can't read a tab's `cwd`, so the
   reconcile fallback can't match. Exact re-link still works if `user.cc_tab`

@@ -169,18 +169,64 @@ else
   skip "no iterm2-capable python (daemon-logic tests need it)"
 fi
 
-# cctab writes a durable label keyed by CC_TAB
+# ---------------------------------------------------------------------------
+hdr "6. ccs CLI (name / ls / restore / prune)"
 if command -v zsh >/dev/null; then
-  HN="$(mktemp -d)"
-  env -i HOME="$HN" PATH="/usr/bin:/bin" CC_TAB="tab-LBL" \
-    zsh -fc "source '$REPO/shell/cc.zsh'; cctab 'my project'" >/dev/null 2>&1
-  got="$(cat "$HN/.config/cc-tabs/by-name/tab-LBL" 2>/dev/null || true)"
-  [ "$got" = "my project" ] && ok "cctab writes label (by-name/tab-LBL = 'my project')" \
-    || no "cctab did not store the label (got '${got:-<nothing>}')"
+  ZRUN() { env -i HOME="$1" PATH="/usr/bin:/bin" CC_TAB="${2:-}" CC_ARGS="" \
+             zsh -fc "source '$REPO/shell/cc.zsh'; ${3}" 2>&1; }
+
+  # Fake config: AAA live+resumable, BBB resumable(closed), CCC closed/no-session
+  SB="$(mktemp -d)"; mkdir -p "$SB/.config/cc-tabs/by-tab" "$SB/.config/cc-tabs/by-name"
+  printf '{"AAA":{"cwd":"/tmp","name":"alpha"},"BBB":{"cwd":"/tmp","name":"beta"},"CCC":{"cwd":"/tmp","name":"gamma"}}' \
+    > "$SB/.config/cc-tabs/registry.json"
+  printf 'sidA' > "$SB/.config/cc-tabs/by-tab/AAA"
+  printf 'sidB' > "$SB/.config/cc-tabs/by-tab/BBB"
+  printf 'AAA'  > "$SB/.config/cc-tabs/live"
+
+  # ccs name
+  ZRUN "$SB" "tabX" "ccs name 'my project'" >/dev/null
+  got="$(cat "$SB/.config/cc-tabs/by-name/tabX" 2>/dev/null || true)"
+  [ "$got" = "my project" ] && ok "ccs name writes label" || no "ccs name failed (got '${got:-none}')"
+
+  # ccs ls states
+  lsout="$(ZRUN "$SB" "" "ccs ls")"
+  if echo "$lsout" | grep -qE 'AAA .*live' && echo "$lsout" | grep -qE 'BBB .*resumable' \
+     && echo "$lsout" | grep -qE 'CCC .*closed'; then
+    ok "ccs ls reports live / resumable / closed correctly"
+  else
+    no "ccs ls states wrong:"; echo "$lsout" | sed 's/^/      /'
+  fi
+
+  # ccs restore (default) -> only BBB (resumable, not live); CCC skipped (no session)
+  r1="$(ZRUN "$SB" "" "ccs restore -n")"
+  if echo "$r1" | grep -q 'restored 1 tab' && echo "$r1" | grep -q 'BBB' && ! echo "$r1" | grep -q 'AAA'; then
+    ok "ccs restore -n rebuilds only closed+resumable (BBB), skips live & no-session"
+  else
+    no "ccs restore default selection wrong:"; echo "$r1" | sed 's/^/      /'
+  fi
+
+  # ccs restore --all -> AAA + BBB
+  r2="$(ZRUN "$SB" "" "ccs restore -n --all")"
+  echo "$r2" | grep -q 'restored 2 tab' && ok "ccs restore --all includes live tabs (2)" \
+    || { no "ccs restore --all wrong:"; echo "$r2" | sed 's/^/      /'; }
+
+  # ccs prune -> drops mapping whose session .jsonl is gone, keeps existing
+  SP="$(mktemp -d)"; mkdir -p "$SP/.config/cc-tabs/by-tab" "$SP/.config/cc-tabs/by-name" "$SP/.claude/projects/proj"
+  printf 'realsid'  > "$SP/.config/cc-tabs/by-tab/REAL"
+  printf 'ghostsid' > "$SP/.config/cc-tabs/by-tab/ZZZ"
+  : > "$SP/.claude/projects/proj/realsid.jsonl"
+  ZRUN "$SP" "" "ccs prune" >/dev/null
+  if [ -f "$SP/.config/cc-tabs/by-tab/REAL" ] && [ ! -f "$SP/.config/cc-tabs/by-tab/ZZZ" ]; then
+    ok "ccs prune drops stale mapping, keeps the live session"
+  else
+    no "ccs prune behaved unexpectedly"
+  fi
+else
+  skip "zsh not found"
 fi
 
 # ---------------------------------------------------------------------------
-hdr "6. Host prerequisites"
+hdr "7. Host prerequisites"
 command -v jq  >/dev/null && ok "jq present" || no "jq missing (hook needs it): brew install jq"
 [ -f "$HOME/.iterm2_shell_integration.zsh" ] && ok "iTerm2 Shell Integration installed" \
   || skip "iTerm2 Shell Integration not detected — cwd reconcile fallback won't work without it"

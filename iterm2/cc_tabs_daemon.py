@@ -46,8 +46,9 @@ import iterm2
 # ---------------------------------------------------------------------------
 CFG_DIR = os.path.expanduser("~/.config/cc-tabs")
 BY_TAB_DIR = os.path.join(CFG_DIR, "by-tab")          # <uuid> -> cc session id (hook writes)
-BY_NAME_DIR = os.path.join(CFG_DIR, "by-name")        # <uuid> -> human label (`cctab` writes)
+BY_NAME_DIR = os.path.join(CFG_DIR, "by-name")        # <uuid> -> human label (`ccs name` writes)
 REGISTRY_PATH = os.path.join(CFG_DIR, "registry.json")  # daemon-owned reconciliation metadata
+LIVE_PATH = os.path.join(CFG_DIR, "live")             # uuids of currently-open tabs (one per line)
 
 # Sessions already handled this run (guards startup-enumeration vs. new-session monitor).
 PROVISIONED: set[str] = set()
@@ -75,6 +76,15 @@ def save_registry(reg: dict) -> None:
     os.replace(tmp, REGISTRY_PATH)
 
 
+def write_live(uuids) -> None:
+    """Record currently-open tab UUIDs so `ccs` can tell live tabs from closed ones."""
+    os.makedirs(CFG_DIR, exist_ok=True)
+    tmp = LIVE_PATH + ".tmp"
+    with open(tmp, "w") as f:
+        f.write("\n".join(sorted(uuids)))
+    os.replace(tmp, LIVE_PATH)
+
+
 def by_tab_path(tab_uuid: str) -> str:
     return os.path.join(BY_TAB_DIR, tab_uuid)
 
@@ -84,7 +94,7 @@ def by_name_path(tab_uuid: str) -> str:
 
 
 def read_name_file(tab_uuid: str) -> str:
-    """The explicit label set by `cctab` for this tab, or '' if none."""
+    """The explicit label set by `ccs name` for this tab, or '' if none."""
     try:
         with open(by_name_path(tab_uuid)) as f:
             return f.read().strip()
@@ -264,7 +274,7 @@ async def provision(app, session, mode: str, registry: dict, claimed: set[str],
         await session.async_set_variable("user.cc_tab", tab_uuid)
     except Exception:
         pass
-    # Effective label: an explicit `cctab` name wins over a native tab title.
+    # Effective label: an explicit `ccs name` label wins over a native tab title.
     label = read_name_file(tab_uuid) or name
     registry[tab_uuid] = {
         "cwd": cwd, "profile": profile, "tab_index": tab_index,
@@ -294,19 +304,24 @@ async def activate(session, tab_uuid: str, mode: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Live label refresh: catch renames (native Edit-Tab-Title or `cctab`) without a
+# Live label refresh: catch renames (native Edit-Tab-Title or `ccs name`) without a
 # restart, and keep each tab's title sticky.
 # ---------------------------------------------------------------------------
 async def refresh_loop(app, registry: dict, interval: float = 5.0) -> None:
+    prev_live = None
     while True:
         await asyncio.sleep(interval)
         changed = False
+        live: set[str] = set()
         try:
             for win in app.terminal_windows:
                 for tab in win.tabs:
                     for s in tab.sessions:
                         tab_uuid = await get_var(s, "user.cc_tab")
-                        if not tab_uuid or tab_uuid not in registry:
+                        if not tab_uuid:
+                            continue
+                        live.add(tab_uuid)
+                        if tab_uuid not in registry:
                             continue
                         cwd = registry[tab_uuid].get("cwd", "")
                         title = real_title(cwd, await get_tab_var(tab, "title"))
@@ -320,6 +335,9 @@ async def refresh_loop(app, registry: dict, interval: float = 5.0) -> None:
             pass
         if changed:
             save_registry(registry)
+        if live != prev_live:
+            write_live(live)
+            prev_live = live
 
 
 # ---------------------------------------------------------------------------
@@ -352,8 +370,9 @@ async def main(connection):
     # entries that are gone and were never resumable.
     if prune(registry, claimed):
         save_registry(registry)
+    write_live(claimed)
 
-    # Keep labels live in the background.
+    # Keep labels + the live set fresh in the background.
     asyncio.create_task(refresh_loop(app, registry))
 
     # Pass 2: anything created from now on is a genuinely new tab.
