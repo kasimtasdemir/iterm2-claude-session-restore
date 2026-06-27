@@ -315,6 +315,18 @@ if command -v zsh >/dev/null; then
     && ok "bare ccs (menu) falls back to ls when non-interactive" \
     || { no "menu non-TTY fallback wrong:"; echo "$mb" | sed 's/^/      /'; }
 
+  # restore skips a session that's already open under a DIFFERENT (reopened) uuid
+  SS="$(mktemp -d)"; mkdir -p "$SS/.config/cc-tabs/by-tab"
+  printf '{"OLD":{"cwd":"/tmp","name":"x","tab_index":0},"NEW":{"cwd":"/tmp","name":"x","tab_index":1}}' \
+    > "$SS/.config/cc-tabs/registry.json"
+  printf 'samesid' > "$SS/.config/cc-tabs/by-tab/OLD"   # resumable, not in live by uuid
+  printf 'samesid' > "$SS/.config/cc-tabs/by-tab/NEW"   # the live tab (new uuid), same session
+  printf 'NEW'     > "$SS/.config/cc-tabs/live"
+  rs="$(ZRUN "$SS" "" "ccs restore -n")"
+  echo "$rs" | grep -q 'would restore 0 tab' \
+    && ok "ccs restore skips a session already live under a new uuid (no duplicate)" \
+    || { no "restore duplicated an already-open session:"; echo "$rs" | sed 's/^/      /'; }
+
   # ccs close (live tab) writes close.req; refuses a non-live tab
   ZRUN "$SB" "" "ccs close alpha" >/dev/null
   [ "$(cat "$SB/.config/cc-tabs/close.req" 2>/dev/null)" = "AAA" ] \

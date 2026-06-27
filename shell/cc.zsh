@@ -162,6 +162,16 @@ _ccs_restore() {
   [[ -r "$reg" ]] || { print -u2 "ccs: no registry yet"; return 1; }
   local live=""; [[ -r "$cfg/live" ]] && live="$(<"$cfg/live")"
 
+  # Sessions already open. A reopened tab gets a *new* uuid, so matching the live
+  # set by uuid alone misses it and we'd open a second copy. Map live tabs to
+  # their SESSION ids (via by-tab) and skip any session that's already running.
+  local -A live_sid
+  local lu lsid
+  for lu in ${(f)live}; do
+    [[ -f "$cfg/by-tab/$lu" ]] || continue
+    lsid="$(<"$cfg/by-tab/$lu")"; [[ -n "$lsid" ]] && live_sid[$lsid]=1
+  done
+
   # Decide the candidate order. Explicit selectors -> just those (resolved, in the
   # order given). Otherwise every tab in saved left-to-right order, so a rebuilt
   # window matches the old one.
@@ -194,6 +204,10 @@ _ccs_restore() {
     fi
     sid="$(<"$cfg/by-tab/$uuid")"
     [[ -n "$sid" ]] || continue
+    if (( ! all )) && [[ -n "${live_sid[$sid]}" ]]; then            # session already open
+      (( targeted )) && print -u2 "ccs restore: '$uuid' is already open (use: ccs jump)"
+      continue
+    fi
     [[ -n "${seen[$sid]}" ]] && continue                            # one tab per session
     seen[$sid]=1
     cwd="$(jq -r --arg u "$uuid" '.[$u].cwd // ""' "$reg")"
