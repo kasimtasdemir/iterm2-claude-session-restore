@@ -21,7 +21,7 @@ macOS restores iTerm2 windows/tabs after a reboot, but the processes inside are 
 
 3. **Shell functions** — `shell/cc.zsh` (sourced from `~/.zshrc`)
    - `cc [claude args]` — the hot path. Resumes this tab's session via `claude --resume <saved-id>` (falls back to fresh). Applies `$CC_ARGS` to every launch.
-   - `ccs` umbrella: `ls`, `name [label]`, `restore [--all|-n]`, `status`, `prune`.
+   - `ccs` umbrella: bare `ccs` opens an interactive no-deps zsh **TUI** (`_ccs_menu`; falls back to `ls` with no TTY). Subcommands: `ls`, `name [label]`, `restore [name|uuid…|--all|-n]` (selectors restore specific tabs), `jump <name|uuid>` (focus an open tab via `focus.req`), `status`, `prune`. Shared resolvers: `_ccs_resolve` (selector→uuid), `_ccs_name_uuid`.
 
 ### Data flow loop
 ```
@@ -40,6 +40,8 @@ daemon  --exports CC_TAB-->  shell  --runs cc-->  claude
 | `by-session/<sid>` | daemon + `ccs name` | label that **follows a session** across tabs (so restore re-applies names) |
 | `live` | daemon | uuids of currently-open tabs (one per line); powers `ccs ls`/`restore` |
 | `restore.req` | `ccs restore` | JSON list the daemon consumes to rebuild tabs |
+| `focus.req` | `ccs jump` / menu | a single tab uuid; daemon selects that tab (`Tab.async_select` + `App.async_activate`) |
+| `daemon.pid` | daemon | pid of the live single instance (single-instance guard) |
 
 Label precedence (`resolve_label`): explicit tab label (`by-name`) > session-carried label (`by-session`) > native tab title.
 
