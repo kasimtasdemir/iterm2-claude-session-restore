@@ -44,7 +44,7 @@ need = {
  "iterm2": ["async_get_app", "NewSessionMonitor", "run_forever"],
  "App":    ["get_window_and_tab_for_session", "get_session_by_id", "async_activate"],
  "Session":["async_get_variable", "async_set_variable", "async_send_text"],
- "Tab":    ["async_select"],
+ "Tab":    ["async_select", "async_close"],
  "Window": ["async_activate", "async_create_tab"],
 }
 bad = []
@@ -314,6 +314,26 @@ if command -v zsh >/dev/null; then
   echo "$mb" | grep -qE 'AAA .*live' \
     && ok "bare ccs (menu) falls back to ls when non-interactive" \
     || { no "menu non-TTY fallback wrong:"; echo "$mb" | sed 's/^/      /'; }
+
+  # ccs close (live tab) writes close.req; refuses a non-live tab
+  ZRUN "$SB" "" "ccs close alpha" >/dev/null
+  [ "$(cat "$SB/.config/cc-tabs/close.req" 2>/dev/null)" = "AAA" ] \
+    && ok "ccs close <live> writes close.req" || no "ccs close did not write close.req"
+  rm -f "$SB/.config/cc-tabs/close.req"
+  cb="$(ZRUN "$SB" "" "ccs close beta" 2>&1)"
+  [ ! -f "$SB/.config/cc-tabs/close.req" ] && echo "$cb" | grep -qi "isn't open" \
+    && ok "ccs close <closed> refuses (no close.req)" \
+    || { no "ccs close should refuse closed tab:"; echo "$cb" | sed 's/^/      /'; }
+
+  # ccs forget (non-live) writes forget.req; refuses a live tab
+  ZRUN "$SB" "" "ccs forget beta" >/dev/null
+  [ "$(cat "$SB/.config/cc-tabs/forget.req" 2>/dev/null)" = "BBB" ] \
+    && ok "ccs forget <closed> writes forget.req" || no "ccs forget did not write forget.req"
+  rm -f "$SB/.config/cc-tabs/forget.req"
+  fb="$(ZRUN "$SB" "" "ccs forget alpha" 2>&1)"
+  [ ! -f "$SB/.config/cc-tabs/forget.req" ] && echo "$fb" | grep -qi "is live" \
+    && ok "ccs forget <live> refuses (no forget.req)" \
+    || { no "ccs forget should refuse live tab:"; echo "$fb" | sed 's/^/      /'; }
 else
   skip "zsh not found"
 fi

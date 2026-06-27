@@ -55,6 +55,8 @@ REGISTRY_PATH = os.path.join(CFG_DIR, "registry.json")  # daemon-owned reconcili
 LIVE_PATH = os.path.join(CFG_DIR, "live")             # uuids of currently-open tabs (one per line)
 RESTORE_REQ_PATH = os.path.join(CFG_DIR, "restore.req")  # `ccs restore` drops a JSON list here
 FOCUS_REQ_PATH = os.path.join(CFG_DIR, "focus.req")   # `ccs jump`/menu drops a uuid here
+CLOSE_REQ_PATH = os.path.join(CFG_DIR, "close.req")   # `ccs close`/menu drops a uuid here
+FORGET_REQ_PATH = os.path.join(CFG_DIR, "forget.req") # `ccs forget`/menu drops a uuid here
 PID_PATH = os.path.join(CFG_DIR, "daemon.pid")        # pid of the live single instance
 
 DAEMON_SCRIPT = os.path.basename(__file__)            # matched to find sibling instances
@@ -501,39 +503,83 @@ async def consume_restore_request(app, connection, registry: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Daemon-driven focus: the `ccs` menu (and `ccs jump`) can't select an iTerm2 tab
-# itself — only the Python API can. It drops a tab uuid here; we bring it to front.
+# Daemon-driven tab ops: the `ccs` menu can't select/close an iTerm2 tab itself —
+# only the Python API can — and "forget" must mutate the registry the daemon holds
+# in memory (else it gets rewritten). Each request file holds one tab uuid.
 # ---------------------------------------------------------------------------
-async def focus_tab(app, tab_uuid: str) -> bool:
-    """Select the tab carrying `tab_uuid` and bring its window/app to the front."""
+def read_req_uuid(path: str) -> str:
+    """Read + delete a single-uuid request file; return the uuid, or '' if none."""
+    try:
+        if not os.path.exists(path):
+            return ""
+        with open(path) as f:
+            tab_uuid = f.read().strip()
+        os.remove(path)
+        return tab_uuid
+    except Exception:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+        return ""
+
+
+async def find_tab(app, tab_uuid: str):
+    """Return the (window, tab) carrying `tab_uuid`, or (None, None)."""
     for win in app.terminal_windows:
         for tab in win.tabs:
             for s in tab.sessions:
                 if (await get_var(s, "user.cc_tab")) == tab_uuid:
-                    try:
-                        await tab.async_select()   # selects tab + raises its window
-                        await app.async_activate()  # bring iTerm2 to the foreground
-                    except Exception:
-                        pass
-                    return True
-    return False
+                    return win, tab
+    return None, None
 
 
 async def consume_focus_request(app) -> None:
-    """Pick up a pending `ccs jump` request and focus that tab, if any."""
-    try:
-        if not os.path.exists(FOCUS_REQ_PATH):
-            return
-        with open(FOCUS_REQ_PATH) as f:
-            tab_uuid = f.read().strip()
-        os.remove(FOCUS_REQ_PATH)
-        if tab_uuid:
-            await focus_tab(app, tab_uuid)
-    except Exception:
+    """`ccs jump`: select the tab and bring its window/app to the front."""
+    tab_uuid = read_req_uuid(FOCUS_REQ_PATH)
+    if not tab_uuid:
+        return
+    _, tab = await find_tab(app, tab_uuid)
+    if tab is not None:
         try:
-            os.remove(FOCUS_REQ_PATH)
+            await tab.async_select()    # selects tab + raises its window
+            await app.async_activate()  # bring iTerm2 to the foreground
+        except Exception:
+            pass
+
+
+async def consume_close_request(app) -> None:
+    """`ccs close`: close the live tab (its by-tab mapping is left intact, so it
+    stays resumable)."""
+    tab_uuid = read_req_uuid(CLOSE_REQ_PATH)
+    if not tab_uuid:
+        return
+    _, tab = await find_tab(app, tab_uuid)
+    if tab is not None:
+        try:
+            await tab.async_close(force=True)
+        except Exception:
+            pass
+
+
+async def consume_forget_request(registry: dict) -> None:
+    """`ccs forget`: drop a (closed) tab's registry entry and its mapping files."""
+    tab_uuid = read_req_uuid(FORGET_REQ_PATH)
+    if not tab_uuid:
+        return
+    sid = read_session_id(tab_uuid)
+    registry.pop(tab_uuid, None)
+    for p in (by_tab_path(tab_uuid), by_name_path(tab_uuid)):
+        try:
+            os.remove(p)
         except OSError:
             pass
+    if sid:
+        try:
+            os.remove(by_session_path(sid))
+        except OSError:
+            pass
+    save_registry(registry)
 
 
 # ---------------------------------------------------------------------------
@@ -546,6 +592,8 @@ async def refresh_loop(app, connection, registry: dict, interval: float = 5.0) -
         await asyncio.sleep(interval)
         await consume_restore_request(app, connection, registry)
         await consume_focus_request(app)
+        await consume_close_request(app)
+        await consume_forget_request(registry)
         changed = False
         live: set[str] = set()
         try:

@@ -51,6 +51,8 @@ ccs() {
     ls|list)         _ccs_ls "$@" ;;
     restore)         _ccs_restore "$@" ;;
     jump|go)         _ccs_jump "$@" ;;
+    close)           _ccs_close "$@" ;;
+    forget|rm)       _ccs_forget "$@" ;;
     status|st)       _ccs_status ;;
     prune)           _ccs_prune ;;
     help|-h|--help)  _ccs_help ;;
@@ -66,6 +68,8 @@ _ccs_help() {
   ccs restore [sel...]      rebuild tabs; with no selector: all closed+resumable
                             sel = a name or uuid; --all includes live; -n dry-run
   ccs jump <name|uuid>      focus an already-open tab
+  ccs close <name|uuid>     close a live tab (stays resumable)
+  ccs forget <name|uuid>    drop a closed tab from the manager (removes its mapping)
   ccs status                this tab's CC_TAB, label, mapped session
   ccs prune                 drop mappings whose Claude session no longer exists"
 }
@@ -233,6 +237,41 @@ _ccs_jump() {
   print -r -- "jumping to '$1'…"
 }
 
+# Close a live tab. Only the daemon can close an iTerm2 tab, so drop the uuid for
+# it. The by-tab mapping is left intact, so the session stays resumable afterward.
+_ccs_close() {
+  emulate -L zsh
+  local cfg="$HOME/.config/cc-tabs" reg="$HOME/.config/cc-tabs/registry.json"
+  (( $# )) || { print -u2 "usage: ccs close <name|uuid>"; return 2; }
+  [[ -r "$reg" ]] || { print -u2 "ccs: no registry yet"; return 1; }
+  local uuid
+  uuid="$(_ccs_resolve "$1")" || { print -u2 "ccs close: no tab matches '$1'"; return 1; }
+  local live=""; [[ -r "$cfg/live" ]] && live="$(<"$cfg/live")"
+  if ! print -r -- "$live" | grep -qx "$uuid"; then
+    print -u2 "ccs close: '$1' isn't open (use: ccs forget $1)"; return 1
+  fi
+  print -r -- "$uuid" > "$cfg/close.req"
+  print -r -- "closing '$1'…"
+}
+
+# Forget a closed tab: remove its mapping + registry entry so it leaves the
+# manager. Daemon-driven because the daemon owns the in-memory registry. Refuses
+# a live tab (close it first). Does not touch Claude's own session data on disk.
+_ccs_forget() {
+  emulate -L zsh
+  local cfg="$HOME/.config/cc-tabs" reg="$HOME/.config/cc-tabs/registry.json"
+  (( $# )) || { print -u2 "usage: ccs forget <name|uuid>"; return 2; }
+  [[ -r "$reg" ]] || { print -u2 "ccs: no registry yet"; return 1; }
+  local uuid
+  uuid="$(_ccs_resolve "$1")" || { print -u2 "ccs forget: no tab matches '$1'"; return 1; }
+  local live=""; [[ -r "$cfg/live" ]] && live="$(<"$cfg/live")"
+  if print -r -- "$live" | grep -qx "$uuid"; then
+    print -u2 "ccs forget: '$1' is live (close it first: ccs close $1)"; return 1
+  fi
+  print -r -- "$uuid" > "$cfg/forget.req"
+  print -r -- "forgetting '$1'…"
+}
+
 _ccs_prune() {
   local cfg="$HOME/.config/cc-tabs" proj="$HOME/.claude/projects" n=0 f sid uuid
   setopt local_options null_glob
@@ -307,15 +346,21 @@ _ccs_menu_actions() {
     print -r -- "  state: $state    cwd: ${cwd/#$HOME/~}"
     print -r -- ""
     local -a acts
-    [[ "$state" == "live" ]] && acts+=("[j]ump to it")
-    [[ "$state" != "live" && "$resumable" == 1 ]] && acts+=("[o]pen / restore")
+    if [[ "$state" == "live" ]]; then
+      acts+=("[j]ump to it" "[c]lose tab")
+    else
+      [[ "$resumable" == 1 ]] && acts+=("[o]pen / restore")
+      acts+=("[x] forget")
+    fi
     acts+=("[n]ame" "[b]ack" "[q]uit")
     print -r -- "  ${(j:    :)acts}"
     print -rn -- "> "
     read -r a || return 1
     case "$a" in
       j|J) [[ "$state" == "live" ]] && { _ccs_jump "$uuid"; print -rn -- "press enter… "; read -r _; return 0; } ;;
+      c|C) [[ "$state" == "live" ]] && { _ccs_close "$uuid"; print -rn -- "press enter… "; read -r _; return 0; } ;;
       o|O) [[ "$state" != "live" && "$resumable" == 1 ]] && { _ccs_restore "$uuid"; print -rn -- "press enter… "; read -r _; return 0; } ;;
+      x|X) [[ "$state" != "live" ]] && { _ccs_forget "$uuid"; print -rn -- "press enter… "; read -r _; return 0; } ;;
       n|N) print -rn -- "new name (blank=cancel): "; read -r nn
            [[ -n "$nn" ]] && { _ccs_name_uuid "$uuid" "$nn"; name="$nn"; } ;;
       b|B|"") return 0 ;;
