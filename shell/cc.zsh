@@ -32,3 +32,26 @@ cc() {
   fi
   claude $extra "$@"
 }
+
+# cctab [name] — give this tab a human label. The daemon shows it as a sticky
+# iTerm2 tab title (beating the theme's auto cwd-title) and uses it to re-link
+# the tab to its Claude session after a reboot — more robust than tab position
+# when several tabs share one folder. With no argument, prints the current label.
+cctab() {
+  emulate -L zsh
+  if [[ -z "$CC_TAB" ]]; then
+    print -u2 "cctab: \$CC_TAB is unset — is the cc_tabs daemon running?"
+    return 1
+  fi
+  local dir="$HOME/.config/cc-tabs/by-name"
+  mkdir -p "$dir"
+  if (( $# == 0 )); then
+    local cur=""; [[ -r "$dir/$CC_TAB" ]] && cur="$(<"$dir/$CC_TAB")"
+    print -r -- "tab $CC_TAB: ${cur:-<unnamed>}"
+    return 0
+  fi
+  local name="$*"
+  print -r -- "$name" > "$dir/$CC_TAB"
+  printf '\033]0;%s\007' "$name"     # instant feedback; daemon makes it sticky
+  print -r -- "named this tab: $name"
+}

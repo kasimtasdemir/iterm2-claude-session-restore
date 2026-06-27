@@ -46,6 +46,7 @@ import iterm2
 # ---------------------------------------------------------------------------
 CFG_DIR = os.path.expanduser("~/.config/cc-tabs")
 BY_TAB_DIR = os.path.join(CFG_DIR, "by-tab")          # <uuid> -> cc session id (hook writes)
+BY_NAME_DIR = os.path.join(CFG_DIR, "by-name")        # <uuid> -> human label (`cctab` writes)
 REGISTRY_PATH = os.path.join(CFG_DIR, "registry.json")  # daemon-owned reconciliation metadata
 
 # Sessions already handled this run (guards startup-enumeration vs. new-session monitor).
@@ -78,6 +79,34 @@ def by_tab_path(tab_uuid: str) -> str:
     return os.path.join(BY_TAB_DIR, tab_uuid)
 
 
+def by_name_path(tab_uuid: str) -> str:
+    return os.path.join(BY_NAME_DIR, tab_uuid)
+
+
+def read_name_file(tab_uuid: str) -> str:
+    """The explicit label set by `cctab` for this tab, or '' if none."""
+    try:
+        with open(by_name_path(tab_uuid)) as f:
+            return f.read().strip()
+    except (FileNotFoundError, OSError):
+        return ""
+
+
+def real_title(cwd: str, title: str) -> str:
+    """
+    A tab title only counts as a *human label* if it isn't just the folder name
+    (or a path) that shells/themes set automatically. Otherwise return '' so the
+    daemon falls back to position — i.e. unnamed tabs behave exactly as before.
+    """
+    title = (title or "").strip()
+    if not title or "/" in title:          # paths are auto-titles, never labels
+        return ""
+    base = os.path.basename(cwd.rstrip("/")) if cwd else ""
+    if base and title.lower() == base.lower():
+        return ""
+    return title
+
+
 def new_uuid() -> str:
     return uuid.uuid4().hex[:12]
 
@@ -96,24 +125,48 @@ async def get_var(session, name: str) -> str:
         return ""
 
 
+async def get_tab_var(tab, name: str) -> str:
+    try:
+        return (await tab.async_get_variable(name)) or ""
+    except Exception:
+        return ""
+
+
+async def apply_title(tab, label: str) -> None:
+    """Make `label` a sticky tab-title override (beats theme/OSC auto-titles)."""
+    try:
+        if label and (await get_tab_var(tab, "title")) != label:
+            await tab.async_set_title(label)
+    except Exception:
+        pass
+
+
 def is_shell_job(job: str) -> bool:
     job = (job or "").lower().lstrip("-")
     base = job.rsplit("/", 1)[-1]
     return base in SHELL_NAMES
 
 
-async def fingerprint(app, session) -> tuple[str, str, int]:
-    """(cwd, profileName, tab_index) — the signals used to re-link a restored tab."""
+async def fingerprint(app, session):
+    """(cwd, profileName, tab_index, name, tab) — signals used to re-link a tab.
+
+    `name` is the tab's human label (a real Edit-Tab-Title override, not the
+    theme's auto cwd-title); '' when the tab is unnamed. `tab` is returned so the
+    caller can stamp a sticky title on it.
+    """
     cwd = await get_var(session, "path")
     profile = await get_var(session, "profileName")
     tab_index = -1
+    tab = None
+    title = ""
     try:
         win, tab = app.get_window_and_tab_for_session(session)
         if win and tab:
             tab_index = win.tabs.index(tab)
+            title = await get_tab_var(tab, "title")
     except Exception:
         pass
-    return cwd, profile, tab_index
+    return cwd, profile, tab_index, real_title(cwd, title), tab
 
 
 async def wait_for_shell(session, timeout: float = 120.0, interval: float = 0.5) -> bool:
@@ -130,15 +183,25 @@ async def wait_for_shell(session, timeout: float = 120.0, interval: float = 0.5)
 # ---------------------------------------------------------------------------
 # Reconciliation: restored session -> previously known UUID
 # ---------------------------------------------------------------------------
-def reconcile(fp: tuple[str, str, int], registry: dict, claimed: set[str]) -> str | None:
+def reconcile(fp, registry: dict, claimed: set[str]) -> str | None:
     """
     Match a restored session to an unclaimed registry entry.
-    Require a cwd match (never guess across different projects); break ties by
-    profile match, then nearest tab position. Returns a UUID or None.
+    Require a cwd match (never guess across different projects). A human label is
+    the strongest signal — an exact name match within the same cwd wins outright
+    (so renamed tabs survive reordering). Otherwise break ties by profile match,
+    then nearest tab position. Returns a UUID or None.
     """
-    cwd, profile, tab_index = fp
+    cwd, profile, tab_index, name = fp[0], fp[1], fp[2], fp[3]
     if not cwd:
         return None
+    # 1) strongest signal: same cwd + same label.
+    if name:
+        for tab_uuid, meta in registry.items():
+            if tab_uuid in claimed:
+                continue
+            if meta.get("cwd") == cwd and meta.get("name") == name:
+                return tab_uuid
+    # 2) fall back to profile + nearest position.
     best, best_score, best_dist = None, -1, 1 << 30
     for tab_uuid, meta in registry.items():
         if tab_uuid in claimed:
@@ -150,6 +213,27 @@ def reconcile(fp: tuple[str, str, int], registry: dict, claimed: set[str]) -> st
         if score > best_score or (score == best_score and dist < best_dist):
             best, best_score, best_dist = tab_uuid, score, dist
     return best
+
+
+def prune(registry: dict, claimed: set[str]) -> bool:
+    """
+    Drop entries for tabs that are gone (not claimed this startup) AND never had a
+    Claude session (no by-tab mapping). Resumable entries are kept. Returns True
+    if anything was removed.
+    """
+    removed = False
+    for tab_uuid in list(registry):
+        if tab_uuid in claimed:
+            continue
+        if os.path.exists(by_tab_path(tab_uuid)):   # resumable -> keep
+            continue
+        registry.pop(tab_uuid, None)
+        try:
+            os.remove(by_name_path(tab_uuid))
+        except OSError:
+            pass
+        removed = True
+    return removed
 
 
 # ---------------------------------------------------------------------------
@@ -165,11 +249,11 @@ async def provision(app, session, mode: str, registry: dict, claimed: set[str],
         PROVISIONED.add(sid)
 
     tab_uuid = await get_var(session, "user.cc_tab")
-    cwd, profile, tab_index = await fingerprint(app, session)
+    cwd, profile, tab_index, name, tab = await fingerprint(app, session)
 
     if mode == "restore" and not (tab_uuid and tab_uuid in registry):
         # User variable was lost across reboot (or unknown) -> reconcile by fingerprint.
-        tab_uuid = reconcile((cwd, profile, tab_index), registry, claimed) or new_uuid()
+        tab_uuid = reconcile((cwd, profile, tab_index, name), registry, claimed) or new_uuid()
     elif not tab_uuid:
         tab_uuid = new_uuid()
 
@@ -180,11 +264,16 @@ async def provision(app, session, mode: str, registry: dict, claimed: set[str],
         await session.async_set_variable("user.cc_tab", tab_uuid)
     except Exception:
         pass
+    # Effective label: an explicit `cctab` name wins over a native tab title.
+    label = read_name_file(tab_uuid) or name
     registry[tab_uuid] = {
-        "cwd": cwd, "profile": profile, "tab_index": tab_index, "updated_at": now(),
+        "cwd": cwd, "profile": profile, "tab_index": tab_index,
+        "name": label, "updated_at": now(),
     }
     save_registry(registry)
 
+    if label and tab is not None:
+        asyncio.create_task(apply_title(tab, label))
     asyncio.create_task(activate(session, tab_uuid, mode))
 
 
@@ -205,10 +294,40 @@ async def activate(session, tab_uuid: str, mode: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Live label refresh: catch renames (native Edit-Tab-Title or `cctab`) without a
+# restart, and keep each tab's title sticky.
+# ---------------------------------------------------------------------------
+async def refresh_loop(app, registry: dict, interval: float = 5.0) -> None:
+    while True:
+        await asyncio.sleep(interval)
+        changed = False
+        try:
+            for win in app.terminal_windows:
+                for tab in win.tabs:
+                    for s in tab.sessions:
+                        tab_uuid = await get_var(s, "user.cc_tab")
+                        if not tab_uuid or tab_uuid not in registry:
+                            continue
+                        cwd = registry[tab_uuid].get("cwd", "")
+                        title = real_title(cwd, await get_tab_var(tab, "title"))
+                        label = read_name_file(tab_uuid) or title
+                        if label and label != registry[tab_uuid].get("name"):
+                            registry[tab_uuid]["name"] = label
+                            registry[tab_uuid]["updated_at"] = now()
+                            changed = True
+                            asyncio.create_task(apply_title(tab, label))
+        except Exception:
+            pass
+        if changed:
+            save_registry(registry)
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 async def main(connection):
     os.makedirs(BY_TAB_DIR, exist_ok=True)
+    os.makedirs(BY_NAME_DIR, exist_ok=True)
     app = await iterm2.async_get_app(connection)
     registry = load_registry()
     claimed: set[str] = set()
@@ -229,6 +348,14 @@ async def main(connection):
     for _, s in restored:
         await provision(app, s, "restore", registry, claimed, lock)
 
+    # Closed-tab cleanup: now that every restored tab has claimed its UUID, drop
+    # entries that are gone and were never resumable.
+    if prune(registry, claimed):
+        save_registry(registry)
+
+    # Keep labels live in the background.
+    asyncio.create_task(refresh_loop(app, registry))
+
     # Pass 2: anything created from now on is a genuinely new tab.
     async with iterm2.NewSessionMonitor(connection) as mon:
         while True:
@@ -238,4 +365,5 @@ async def main(connection):
                 await provision(app, s, "new", registry, claimed, lock)
 
 
-iterm2.run_forever(main)
+if __name__ == "__main__":
+    iterm2.run_forever(main)

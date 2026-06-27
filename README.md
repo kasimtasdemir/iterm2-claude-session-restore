@@ -119,6 +119,25 @@ Because resume uses the exact saved session id (not `--continue`, i.e. "most
 recent in this folder"), **two tabs open in the same folder each resume their own
 session** — which is the whole reason the per-tab mapping exists.
 
+### Naming tabs
+
+Same-folder tabs are otherwise told apart only by their left-to-right position,
+which can shuffle. Giving a tab a **name** makes its identity stable across
+reorders and reboots. Two ways, and they cooperate:
+
+- **`cctab "my label"`** — labels the current tab. The daemon shows it as a
+  sticky iTerm2 tab title (it overrides your theme's auto cwd-title) and stores
+  it durably. `cctab` with no argument prints the current label.
+- **iTerm2 → Edit Tab Title** (right-click the tab) — the daemon reads this
+  natively. A title that's just the folder name is treated as "unnamed" and
+  ignored, so only labels you actually choose count.
+
+On restore, a tab with a name re-links by **name first**, falling back to
+position only when there's no name — so unnamed tabs behave exactly as before.
+Renames (either method) are picked up live within a few seconds. When you close
+a tab, its entry is pruned on the next daemon start unless it still has a
+resumable session.
+
 ## Verify it works
 
 Before trusting it with a real reboot, run the offline harness:

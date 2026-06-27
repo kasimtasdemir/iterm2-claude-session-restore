@@ -157,7 +157,30 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-hdr "5. Host prerequisites"
+hdr "5. Daemon logic: labels, reconcile-by-name, prune"
+if [ -n "$ITERM_PY" ]; then
+  if "$ITERM_PY" "$REPO/test/test_daemon_logic.py" >/tmp/ccvlogic 2>&1; then
+    ok "real_title / reconcile-by-name / prune all behave"
+    grep '    OK' /tmp/ccvlogic | sed 's/^/    /'
+  else
+    no "daemon logic test failed:"; sed 's/^/      /' /tmp/ccvlogic
+  fi
+else
+  skip "no iterm2-capable python (daemon-logic tests need it)"
+fi
+
+# cctab writes a durable label keyed by CC_TAB
+if command -v zsh >/dev/null; then
+  HN="$(mktemp -d)"
+  env -i HOME="$HN" PATH="/usr/bin:/bin" CC_TAB="tab-LBL" \
+    zsh -fc "source '$REPO/shell/cc.zsh'; cctab 'my project'" >/dev/null 2>&1
+  got="$(cat "$HN/.config/cc-tabs/by-name/tab-LBL" 2>/dev/null || true)"
+  [ "$got" = "my project" ] && ok "cctab writes label (by-name/tab-LBL = 'my project')" \
+    || no "cctab did not store the label (got '${got:-<nothing>}')"
+fi
+
+# ---------------------------------------------------------------------------
+hdr "6. Host prerequisites"
 command -v jq  >/dev/null && ok "jq present" || no "jq missing (hook needs it): brew install jq"
 [ -f "$HOME/.iterm2_shell_integration.zsh" ] && ok "iTerm2 Shell Integration installed" \
   || skip "iTerm2 Shell Integration not detected — cwd reconcile fallback won't work without it"
