@@ -17,6 +17,43 @@ SOURCE_LINE="source \"$REPO/shell/cc.zsh\""
 
 say()  { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[!]\033[0m %s\n' "$*"; }
+SHELL_INTEGRATION_OK=0
+
+# iTerm2 Shell Integration gives restored tabs a reliable `cwd`, which the daemon
+# needs to reconcile a tab whose identity variable was lost across a reboot.
+# Not strictly required (exact re-link via user.cc_tab works without it), but the
+# reboot-survival fallback depends on it — so detect, and offer to install it.
+ensure_shell_integration() {
+  local file="$HOME/.iterm2_shell_integration.zsh"
+  local src='test -e "${HOME}/.iterm2_shell_integration.zsh" && source "${HOME}/.iterm2_shell_integration.zsh"'
+  if [[ -f "$file" ]]; then
+    say "iTerm2 Shell Integration already installed"
+    SHELL_INTEGRATION_OK=1
+    return
+  fi
+  warn "iTerm2 Shell Integration is NOT installed."
+  warn "Without it, tabs whose identity is lost on reboot can't be reconciled by cwd."
+  if [[ ! -t 0 ]]; then
+    warn "Non-interactive shell — skipping. Install later: iTerm2 menu > Install Shell Integration"
+    return
+  fi
+  local reply=""
+  printf '    Install it now (downloads %s)? [y/N] ' "$file"
+  read -r reply || true
+  if [[ "$reply" != [yY] ]]; then
+    warn "Skipped. The rest still installs; reboot-survival fallback may not work until you add it."
+    return
+  fi
+  if curl -fsSL https://iterm2.com/shell_integration/zsh -o "$file"; then
+    grep -Fqs "$src" "$ZSHRC" 2>/dev/null || {
+      printf '\n# iTerm2 shell integration\n%s\n' "$src" >> "$ZSHRC"
+    }
+    say "  -> installed Shell Integration and sourced it from ~/.zshrc"
+    SHELL_INTEGRATION_OK=1
+  else
+    warn "Download failed. Install manually: iTerm2 menu > Install Shell Integration"
+  fi
+}
 
 # 1. Daemon -------------------------------------------------------------------
 say "Installing iTerm2 AutoLaunch daemon"
@@ -52,18 +89,31 @@ cat <<EOF
   (Or point the marketplace at the GitHub repo URL once pushed.)
 EOF
 
+# 4. Shell Integration (a requirement for the reboot fallback) ----------------
+say "Checking iTerm2 Shell Integration"
+ensure_shell_integration
+
+# jq (the hook needs it) ------------------------------------------------------
+if command -v jq >/dev/null 2>&1; then
+  say "jq present"
+else
+  warn "jq is missing — the SessionStart hook needs it. Install with: brew install jq"
+fi
+
 # Prereq reminders ------------------------------------------------------------
-say "Manual prerequisites (one-time):"
+say "Remaining one-time GUI prerequisites (can't be scripted):"
 cat <<'EOF'
   - iTerm2 > Settings > General > Magic > Enable Python API
   - iTerm2 > Settings > General > Startup > Use System Window Restoration Setting
   - System Settings > Desktop & Dock > "Close windows when quitting an application" = OFF
-  - Install iTerm2 Shell Integration so restored tabs report cwd:
-        https://iterm2.com/documentation-shell-integration.html
-  - jq must be installed (the hook uses it):  brew install jq
 
 Then quit & reopen iTerm2 once so the daemon auto-launches.
-Verify the wiring any time with:  ./test/verify.sh
 EOF
 
-say "Done."
+echo
+if [[ "$SHELL_INTEGRATION_OK" -eq 1 ]]; then
+  say "Done. Verify the full wiring with:  ./test/verify.sh"
+else
+  warn "Done, but Shell Integration is unmet — reboot-survival fallback may not work yet."
+  say  "Verify the full wiring with:  ./test/verify.sh"
+fi

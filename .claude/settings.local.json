@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(./test/verify.sh)",
+      "Read(//tmp/**)",
+      "Bash(git add *)",
+      "Bash(git commit -q -m 'install: detect iTerm2 Shell Integration and offer one-step install *)",
+      "Bash(git push *)"
+    ]
+  }
+}

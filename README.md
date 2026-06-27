@@ -55,17 +55,27 @@ Then, inside Claude Code, install the hook plugin (`cc-tabs` is the plugin's nam
 /plugin install cc-tabs@cc-tabs
 ```
 
-### One-time manual prerequisites
+### Prerequisites
 
-These can't be scripted (they're GUI toggles / external installers):
+`install.sh` handles two of these for you: it **detects iTerm2 Shell Integration
+and offers to install it** (needed so restored tabs report their `cwd` for the
+reconcile fallback), and it checks that `jq` is present (the hook uses it;
+`brew install jq` if not).
+
+The rest are GUI toggles that can't be scripted — set them once:
 
 - **iTerm2 → Settings → General → Magic → Enable Python API**
 - **iTerm2 → Settings → General → Startup → "Use System Window Restoration Setting"**
 - **System Settings → Desktop & Dock → "Close windows when quitting an application" = OFF**
-- **iTerm2 [Shell Integration](https://iterm2.com/documentation-shell-integration.html)** — so restored tabs report their `cwd` (the daemon's reconcile fallback needs it)
-- **`jq`** — `brew install jq` (the hook uses it)
 
 Quit & reopen iTerm2 once so the daemon auto-launches.
+
+> **Is Shell Integration mandatory?** Not for the tool to run — within a single
+> boot everything works without it, and if iTerm2 preserves the `user.cc_tab`
+> variable across restoration the re-link is exact. It's only the *fallback*
+> (reconciling a tab whose variable was lost, by `cwd`) that needs it — which is
+> precisely the reboot case this tool exists for. So `install.sh` doesn't hard-block
+> on it; it strongly recommends it and offers to install it in one step.
 
 ## Verify it works
 
