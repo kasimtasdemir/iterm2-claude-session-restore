@@ -85,8 +85,10 @@ cat <<EOF
 
       /plugin marketplace add $REPO
       /plugin install cc-tabs@cc-tabs
+      /reload-plugins
 
   (Or point the marketplace at the GitHub repo URL once pushed.)
+  Then quit & reopen iTerm2 — and click "Allow" if it asks to control iTerm2.
 EOF
 
 # 4. Shell Integration (a requirement for the reboot fallback) ----------------

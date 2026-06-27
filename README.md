@@ -53,7 +53,11 @@ Then, inside Claude Code, install the hook plugin (`cc-tabs` is the plugin's nam
 ```
 /plugin marketplace add kasimtasdemir/iterm2-claude-session-restore
 /plugin install cc-tabs@cc-tabs
+/reload-plugins
 ```
+
+`/reload-plugins` activates the SessionStart hook in the current session (the
+install command prompts you to run it). New sessions pick it up automatically.
 
 ### Prerequisites
 
@@ -68,7 +72,22 @@ The rest are GUI toggles that can't be scripted — set them once:
 - **iTerm2 → Settings → General → Startup → "Use System Window Restoration Setting"**
 - **System Settings → Desktop & Dock → "Close windows when quitting an application" = OFF**
 
-Quit & reopen iTerm2 once so the daemon auto-launches.
+**Quit & reopen iTerm2 (⌘Q)** so the daemon auto-launches. The first time the
+Python API is enabled, iTerm2 shows a dialog asking to let a script **control
+iTerm2** — click **Allow** (or **Always Allow for this script**). Without that,
+the daemon can't stamp tabs.
+
+### Did it start? (quick check)
+
+Open a fresh tab and run `echo $CC_TAB`. A 12-char hex value means the daemon is
+running and stamping tabs. If it's empty:
+
+- **iTerm2 → Scripts** menu should list `cc_tabs_daemon.py`. If it's not there,
+  `install.sh` didn't copy it to `~/Library/Application Support/iTerm2/Scripts/AutoLaunch/`.
+- **iTerm2 → Scripts → Manage → Console** shows the daemon's stdout/errors — check
+  it if the script is listed but `CC_TAB` stays empty (usual cause: Python API not
+  enabled, or you dismissed the "Allow control" dialog).
+- Confirm **Enable Python API** is on, then fully quit (⌘Q) and reopen iTerm2.
 
 > **Is Shell Integration mandatory?** Not for the tool to run — within a single
 > boot everything works without it, and if iTerm2 preserves the `user.cc_tab`
