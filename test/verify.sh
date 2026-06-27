@@ -92,9 +92,10 @@ HOME="$SANDBOX" CC_TAB="tab-XYZ" bash "$HOOK" <<<"$PAYLOAD"
 got="$(cat "$SANDBOX/.config/cc-tabs/by-tab/tab-XYZ" 2>/dev/null || true)"
 [ "$got" = "sess-ABC123" ] && ok "maps CC_TAB -> session_id ($got)" || no "expected sess-ABC123, got '${got:-<nothing>}'"
 
-# 3b. Without CC_TAB -> writes nothing
+# 3b. Without CC_TAB -> writes nothing.  env -u CC_TAB so the test is hermetic
+# even when run inside a tab the daemon has already stamped.
 SANDBOX2="$(mktemp -d)"
-HOME="$SANDBOX2" bash "$HOOK" <<<"$PAYLOAD"
+env -u CC_TAB HOME="$SANDBOX2" bash "$HOOK" <<<"$PAYLOAD"
 if [ -z "$(ls -A "$SANDBOX2/.config/cc-tabs/by-tab" 2>/dev/null)" ]; then
   ok "no CC_TAB -> writes nothing (safe as a global hook)"
 else
@@ -142,6 +143,15 @@ EOF
   else
     no "stale-id fallback did not behave as expected"; sed 's/^/      /' "$LOG"
   fi
+
+  # 4d. CC_ARGS is injected into every launch (including the daemon's bare `cc`)
+  : > "$LOG"
+  env -i HOME="$H1" PATH="$BIN:/usr/bin:/bin" CC_TAB="tab-XYZ" STALE=0 \
+    CC_ARGS="--enable-auto-mode" \
+    zsh -fc "source '$REPO/shell/cc.zsh'; cc" >/dev/null 2>&1
+  grep -q 'CALL:--resume sess-ABC123 --enable-auto-mode' "$LOG" \
+    && ok "CC_ARGS forwarded -> 'claude --resume sess-ABC123 --enable-auto-mode'" \
+    || { no "CC_ARGS not forwarded"; sed 's/^/      /' "$LOG"; }
 else
   skip "zsh not found"
 fi

@@ -12,8 +12,14 @@
 # shell history. Harmless if already set.
 setopt HIST_IGNORE_SPACE 2>/dev/null
 
+# CC_ARGS: default flags applied to EVERY launch, including the daemon's bare
+# `cc` on reboot-restore (which passes no args of its own). Set it in ~/.zshrc, e.g.
+#     export CC_ARGS="--enable-auto-mode"
+# Per-invocation args you type ("$@") are appended after these.
 cc() {
   emulate -L zsh
+  local -a extra
+  extra=(${(z)CC_ARGS})           # word-split, honoring quotes; empty if unset
   local map="$HOME/.config/cc-tabs/by-tab/$CC_TAB"
   if [[ -n "$CC_TAB" && -r "$map" ]]; then
     local sid
@@ -21,8 +27,8 @@ cc() {
     if [[ -n "$sid" ]]; then
       # Resume the mapped session. If the id is stale/gone, claude exits non-zero
       # and we fall through to a fresh session below.
-      claude --resume "$sid" "$@" && return
+      claude --resume "$sid" $extra "$@" && return
     fi
   fi
-  claude "$@"
+  claude $extra "$@"
 }

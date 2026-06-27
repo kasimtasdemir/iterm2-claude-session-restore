@@ -96,6 +96,25 @@ running and stamping tabs. If it's empty:
 > precisely the reboot case this tool exists for. So `install.sh` doesn't hard-block
 > on it; it strongly recommends it and offers to install it in one step.
 
+## Usage
+
+Start Claude with **`cc`** instead of `claude` — that's the launcher that resumes
+the right session for the tab (it runs `claude --resume <saved-id>`, falling back
+to a fresh session when there's no mapping). Any flags you pass are forwarded:
+`cc --model opus` works.
+
+To apply default flags to **every** launch — including the daemon's automatic
+`cc` on reboot-restore, which passes no flags of its own — set `CC_ARGS` in
+`~/.zshrc`:
+
+```bash
+export CC_ARGS="--enable-auto-mode"   # example: always start in auto mode
+```
+
+Because resume uses the exact saved session id (not `--continue`, i.e. "most
+recent in this folder"), **two tabs open in the same folder each resume their own
+session** — which is the whole reason the per-tab mapping exists.
+
 ## Verify it works
 
 Before trusting it with a real reboot, run the offline harness:
