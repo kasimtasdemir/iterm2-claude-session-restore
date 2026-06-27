@@ -42,16 +42,16 @@ src = open(sys.argv[1]).read()
 # The exact API attributes the daemon depends on.
 need = {
  "iterm2": ["async_get_app", "NewSessionMonitor", "run_forever"],
- "App":    ["get_window_and_tab_for_session", "get_session_by_id"],
+ "App":    ["get_window_and_tab_for_session", "get_session_by_id", "async_activate"],
  "Session":["async_get_variable", "async_set_variable", "async_send_text"],
+ "Tab":    ["async_select"],
+ "Window": ["async_activate", "async_create_tab"],
 }
 bad = []
-for attr in need["iterm2"]:
-    if not hasattr(iterm2, attr): bad.append("iterm2."+attr)
-for attr in need["App"]:
-    if not hasattr(iterm2.App, attr): bad.append("App."+attr)
-for attr in need["Session"]:
-    if not hasattr(iterm2.Session, attr): bad.append("Session."+attr)
+for cls, attrs in need.items():
+    obj = iterm2 if cls == "iterm2" else getattr(iterm2, cls)
+    for attr in attrs:
+        if not hasattr(obj, attr): bad.append(cls+"."+attr)
 print("MISSING:"+",".join(bad) if bad else "OK")
 PY
 else
@@ -272,6 +272,48 @@ if command -v zsh >/dev/null; then
   ZRUN "$SM" "tabM" "ccs name 'follow me'" >/dev/null
   [ "$(cat "$SM/.config/cc-tabs/by-session/sessZ" 2>/dev/null)" = "follow me" ] \
     && ok "ccs name mirrors label to by-session" || no "by-session mirror failed"
+
+  # targeted restore: by name -> only that tab (BBB=beta is resumable+closed)
+  rt="$(ZRUN "$SB" "" "ccs restore -n beta")"
+  if echo "$rt" | grep -q 'would restore 1 tab' && echo "$rt" | grep -q 'BBB'; then
+    ok "ccs restore <name> targets a single tab" || true
+  else
+    no "targeted restore by name wrong:"; echo "$rt" | sed 's/^/      /'
+  fi
+
+  # targeted restore: by uuid works too
+  ZRUN "$SB" "" "ccs restore BBB" >/dev/null
+  if jq -e '.[0].sid == "sidB" and (length == 1)' "$SB/.config/cc-tabs/restore.req" >/dev/null 2>&1; then
+    ok "ccs restore <uuid> writes a single-entry request"
+  else
+    no "targeted restore by uuid failed"; cat "$SB/.config/cc-tabs/restore.req" 2>/dev/null | sed 's/^/      /'
+  fi
+  rm -f "$SB/.config/cc-tabs/restore.req"
+
+  # targeted restore refuses a live tab (AAA=alpha is live) -> 0, points at jump
+  ra="$(ZRUN "$SB" "" "ccs restore -n alpha")"
+  echo "$ra" | grep -q 'would restore 0 tab' && echo "$ra" | grep -qi 'jump' \
+    && ok "ccs restore <live> refuses and suggests jump" \
+    || { no "targeted restore of live tab wrong:"; echo "$ra" | sed 's/^/      /'; }
+
+  # ccs jump (live tab) writes focus.req with the resolved uuid
+  ZRUN "$SB" "" "ccs jump alpha" >/dev/null
+  [ "$(cat "$SB/.config/cc-tabs/focus.req" 2>/dev/null)" = "AAA" ] \
+    && ok "ccs jump <name> writes focus.req for the daemon" \
+    || { no "ccs jump did not write focus.req"; }
+  rm -f "$SB/.config/cc-tabs/focus.req"
+
+  # ccs jump refuses a non-live tab (BBB is resumable/closed)
+  jb="$(ZRUN "$SB" "" "ccs jump beta" 2>&1)"
+  [ ! -f "$SB/.config/cc-tabs/focus.req" ] && echo "$jb" | grep -qi "isn't open" \
+    && ok "ccs jump <closed> refuses (no focus.req)" \
+    || { no "ccs jump should refuse closed tab:"; echo "$jb" | sed 's/^/      /'; }
+
+  # bare `ccs` (menu) with no TTY falls back to a plain listing
+  mb="$(ZRUN "$SB" "" "ccs")"
+  echo "$mb" | grep -qE 'AAA .*live' \
+    && ok "bare ccs (menu) falls back to ls when non-interactive" \
+    || { no "menu non-TTY fallback wrong:"; echo "$mb" | sed 's/^/      /'; }
 else
   skip "zsh not found"
 fi

@@ -54,6 +54,7 @@ BY_SESSION_DIR = os.path.join(CFG_DIR, "by-session")  # <session-id> -> label (f
 REGISTRY_PATH = os.path.join(CFG_DIR, "registry.json")  # daemon-owned reconciliation metadata
 LIVE_PATH = os.path.join(CFG_DIR, "live")             # uuids of currently-open tabs (one per line)
 RESTORE_REQ_PATH = os.path.join(CFG_DIR, "restore.req")  # `ccs restore` drops a JSON list here
+FOCUS_REQ_PATH = os.path.join(CFG_DIR, "focus.req")   # `ccs jump`/menu drops a uuid here
 PID_PATH = os.path.join(CFG_DIR, "daemon.pid")        # pid of the live single instance
 
 DAEMON_SCRIPT = os.path.basename(__file__)            # matched to find sibling instances
@@ -500,6 +501,42 @@ async def consume_restore_request(app, connection, registry: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Daemon-driven focus: the `ccs` menu (and `ccs jump`) can't select an iTerm2 tab
+# itself — only the Python API can. It drops a tab uuid here; we bring it to front.
+# ---------------------------------------------------------------------------
+async def focus_tab(app, tab_uuid: str) -> bool:
+    """Select the tab carrying `tab_uuid` and bring its window/app to the front."""
+    for win in app.terminal_windows:
+        for tab in win.tabs:
+            for s in tab.sessions:
+                if (await get_var(s, "user.cc_tab")) == tab_uuid:
+                    try:
+                        await tab.async_select()   # selects tab + raises its window
+                        await app.async_activate()  # bring iTerm2 to the foreground
+                    except Exception:
+                        pass
+                    return True
+    return False
+
+
+async def consume_focus_request(app) -> None:
+    """Pick up a pending `ccs jump` request and focus that tab, if any."""
+    try:
+        if not os.path.exists(FOCUS_REQ_PATH):
+            return
+        with open(FOCUS_REQ_PATH) as f:
+            tab_uuid = f.read().strip()
+        os.remove(FOCUS_REQ_PATH)
+        if tab_uuid:
+            await focus_tab(app, tab_uuid)
+    except Exception:
+        try:
+            os.remove(FOCUS_REQ_PATH)
+        except OSError:
+            pass
+
+
+# ---------------------------------------------------------------------------
 # Live label refresh: catch renames (native Edit-Tab-Title or `ccs name`) without a
 # restart, and keep each tab's title sticky.
 # ---------------------------------------------------------------------------
@@ -508,6 +545,7 @@ async def refresh_loop(app, connection, registry: dict, interval: float = 5.0) -
     while True:
         await asyncio.sleep(interval)
         await consume_restore_request(app, connection, registry)
+        await consume_focus_request(app)
         changed = False
         live: set[str] = set()
         try:
