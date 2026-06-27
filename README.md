@@ -225,6 +225,10 @@ sources you trust. The hook writes exactly one file per tab under
   if you want a layout back.
 - **`ccs name` label latency.** A new label prints instantly but becomes a sticky
   tab title on the daemon's next refresh tick (~5s), not the same instant.
+- **Duplicate entries from many reboots.** Because `user.cc_tab` is reborn each
+  reboot, the same session can accumulate several tab-uuids. The daemon collapses
+  these to one resumable entry per session on startup, and reconcile prefers a
+  resumable entry, so duplicates self-heal rather than mis-resuming or doubling up.
 - **No Shell Integration.** Without it the daemon can't read a tab's `cwd`, so the
   reconcile fallback can't match. Exact re-link still works if `user.cc_tab`
   survives, but install Shell Integration for reliability.

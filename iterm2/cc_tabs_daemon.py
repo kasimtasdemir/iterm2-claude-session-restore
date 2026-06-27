@@ -149,7 +149,9 @@ def real_title(cwd: str, title: str) -> str:
     daemon falls back to position — i.e. unnamed tabs behave exactly as before.
     """
     title = (title or "").strip()
-    if not title or "/" in title:          # paths are auto-titles, never labels
+    # Reject the shapes iTerm2/shells generate automatically:
+    #   paths ("~/x/y"), the home glyph ("~"), and "<name> (<job>)" e.g. "~ (-zsh)".
+    if not title or "/" in title or "(" in title or title in ("~", "-zsh", "-bash"):
         return ""
     base = os.path.basename(cwd.rstrip("/")) if cwd else ""
     if base and title.lower() == base.lower():
@@ -244,25 +246,61 @@ def reconcile(fp, registry: dict, claimed: set[str]) -> str | None:
     cwd, profile, tab_index, name = fp[0], fp[1], fp[2], fp[3]
     if not cwd:
         return None
-    # 1) strongest signal: same cwd + same label.
+
+    def resumable(u: str) -> bool:           # has a session to actually resume
+        return os.path.exists(by_tab_path(u))
+
+    # 1) strongest signal: same cwd + same label. Among duplicates, prefer the one
+    #    that's actually resumable, then the most recently updated.
     if name:
-        for tab_uuid, meta in registry.items():
-            if tab_uuid in claimed:
-                continue
-            if meta.get("cwd") == cwd and meta.get("name") == name:
-                return tab_uuid
-    # 2) fall back to profile + nearest position.
+        cands = [u for u, m in registry.items()
+                 if u not in claimed and m.get("cwd") == cwd and m.get("name") == name]
+        if cands:
+            cands.sort(key=lambda u: (0 if resumable(u) else 1,
+                                      -registry[u].get("updated_at", 0)))
+            return cands[0]
+    # 2) fall back to profile + resumable + nearest position.
     best, best_score, best_dist = None, -1, 1 << 30
     for tab_uuid, meta in registry.items():
         if tab_uuid in claimed:
             continue
         if meta.get("cwd") != cwd:          # hard requirement
             continue
-        score = 3 + (1 if profile and meta.get("profile") == profile else 0)
+        score = (3
+                 + (1 if profile and meta.get("profile") == profile else 0)
+                 + (2 if resumable(tab_uuid) else 0))
         dist = abs(tab_index - meta.get("tab_index", -999))
         if score > best_score or (score == best_score and dist < best_dist):
             best, best_score, best_dist = tab_uuid, score, dist
     return best
+
+
+def dedupe_sessions(registry: dict) -> bool:
+    """
+    Collapse multiple tab-uuids that map to the same Claude session id (they pile
+    up because user.cc_tab is reborn each reboot). Keep the most-recently-updated
+    uuid per session; drop the rest and their by-tab/by-name files. Returns True
+    if anything changed.
+    """
+    by_sid: dict[str, list[str]] = {}
+    for tab_uuid in list(registry):
+        sid = read_session_id(tab_uuid)
+        if sid:
+            by_sid.setdefault(sid, []).append(tab_uuid)
+    removed = False
+    for sid, uuids in by_sid.items():
+        if len(uuids) <= 1:
+            continue
+        uuids.sort(key=lambda u: registry[u].get("updated_at", 0), reverse=True)
+        for u in uuids[1:]:
+            registry.pop(u, None)
+            for p in (by_tab_path(u), by_name_path(u)):
+                try:
+                    os.remove(p)
+                except OSError:
+                    pass
+            removed = True
+    return removed
 
 
 def prune(registry: dict, claimed: set[str]) -> bool:
@@ -470,6 +508,11 @@ async def main(connection):
     registry = load_registry()
     claimed: set[str] = set()
     lock = asyncio.Lock()
+
+    # Collapse historical duplicate uuids (same session, many reboots) before
+    # we reconcile, so there's one resumable entry per session to match against.
+    if dedupe_sessions(registry):
+        save_registry(registry)
 
     # Let macOS window restoration settle before we enumerate restored tabs.
     await asyncio.sleep(1.5)

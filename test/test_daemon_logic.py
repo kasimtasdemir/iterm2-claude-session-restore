@@ -30,6 +30,8 @@ check(ccd.real_title("/a/b/CC-sessions", "CC-sessions") == "", "title == folder 
 check(ccd.real_title("/a/b/CC-sessions", "cc tabs") == "cc tabs", "real label -> kept")
 check(ccd.real_title("/a/b/CC-sessions", "~/a/b/CC-sessions") == "", "path-like title -> ignored")
 check(ccd.real_title("/a/b/CC-sessions", "") == "", "empty title -> ignored")
+check(ccd.real_title("/a/b/CC-sessions", "~ (-zsh)") == "", "iTerm2 auto '(job)' title -> ignored")
+check(ccd.real_title("/a/b/CC-sessions", "~") == "", "home glyph -> ignored")
 
 # --- reconcile: a name match beats position ---------------------------------
 reg = {
@@ -42,6 +44,25 @@ check(ccd.reconcile(("/p", "Default", 1, ""), reg, set()) == "B",
       "no name -> nearest position")
 check(ccd.reconcile(("/other", "Default", 0, ""), reg, set()) is None,
       "different cwd -> no match")
+
+# --- reconcile prefers a resumable duplicate; dedupe collapses same-session uuids
+with tempfile.TemporaryDirectory() as d:
+    ccd.BY_TAB_DIR = os.path.join(d, "by-tab")
+    ccd.BY_NAME_DIR = os.path.join(d, "by-name")
+    os.makedirs(ccd.BY_TAB_DIR)
+    os.makedirs(ccd.BY_NAME_DIR)
+    reg3 = {"R": {"cwd": "/p", "name": "cs1", "tab_index": 5, "updated_at": 1},
+            "E": {"cwd": "/p", "name": "cs1", "tab_index": 0, "updated_at": 9}}
+    open(ccd.by_tab_path("R"), "w").write("sidR")   # only R is resumable
+    check(ccd.reconcile(("/p", "Default", 0, "cs1"), reg3, set()) == "R",
+          "reconcile prefers the resumable duplicate over the empty one")
+
+    reg4 = {"U1": {"updated_at": 1}, "U2": {"updated_at": 2}}
+    open(ccd.by_tab_path("U1"), "w").write("sameSID")
+    open(ccd.by_tab_path("U2"), "w").write("sameSID")
+    ccd.dedupe_sessions(reg4)
+    check("U2" in reg4 and "U1" not in reg4, "dedupe keeps the most-recent uuid for a session")
+    check(not os.path.exists(ccd.by_tab_path("U1")), "dedupe removes the dropped uuid's by-tab file")
 
 # --- prune: drop gone+unused, keep resumable --------------------------------
 with tempfile.TemporaryDirectory() as d:
