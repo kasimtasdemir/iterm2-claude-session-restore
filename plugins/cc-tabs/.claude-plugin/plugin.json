@@ -1,0 +1,12 @@
+{
+  "name": "cc-tabs",
+  "displayName": "CC Tabs",
+  "version": "0.1.0",
+  "description": "Records the Claude Code session id for the current iTerm2 tab (keyed by $CC_TAB) so the cc_tabs daemon can resume it after a reboot.",
+  "author": {
+    "name": "Kasim Tasdemir"
+  },
+  "repository": "https://github.com/kasimtasdemir/iterm2-claude-session-restore",
+  "license": "MIT",
+  "keywords": ["iterm2", "claude-code", "session", "resume", "reboot"]
+}

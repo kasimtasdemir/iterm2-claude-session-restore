@@ -1,0 +1,15 @@
+{
+  "name": "cc-tabs",
+  "description": "Resume the right Claude Code session in each iTerm2 tab after a reboot.",
+  "owner": {
+    "name": "Kasim Tasdemir",
+    "url": "https://github.com/kasimtasdemir"
+  },
+  "plugins": [
+    {
+      "name": "cc-tabs",
+      "source": "./plugins/cc-tabs",
+      "description": "Persist the Claude Code session id per iTerm2 tab so reboots resume the right session."
+    }
+  ]
+}

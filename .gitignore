@@ -1,0 +1,5 @@
+# local iterm2 test venv (not shipped)
+venv-iterm/
+__pycache__/
+*.pyc
+.DS_Store
