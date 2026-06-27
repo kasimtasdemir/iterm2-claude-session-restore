@@ -182,8 +182,17 @@ sources you trust. The hook writes exactly one file per tab under
   until focused. The daemon waits up to 120s, then exports `CC_TAB` and resumes
   once the shell is alive.
 - **Two sessions in the same folder, swapped after reboot.** Only happens if
-  `user.cc_tab` was lost *and* tab order changed. Give those tabs different
-  profiles — the profile signal then breaks the tie.
+  `user.cc_tab` was lost *and* tab order changed *and* the tabs are unnamed.
+  Name them with `cctab` (or different profiles) and the swap can't happen.
+- **Closing a window vs. quitting iTerm2.** macOS window restoration snapshots on
+  a clean app **quit** (⌘Q) and replays on relaunch. Closing a single window is
+  treated as intentional disposal — the app stays running, so there's no snapshot
+  and that window won't come back. Your Claude conversations are still safe on
+  disk (`claude --resume <id>` works, and resumable entries stay in the registry);
+  only the auto-restore of that window's layout is lost. Use ⌘Q, not window-close,
+  if you want a layout back.
+- **`cctab` label latency.** A new label prints instantly but becomes a sticky
+  tab title on the daemon's next refresh tick (~5s), not the same instant.
 - **No Shell Integration.** Without it the daemon can't read a tab's `cwd`, so the
   reconcile fallback can't match. Exact re-link still works if `user.cc_tab`
   survives, but install Shell Integration for reliability.
