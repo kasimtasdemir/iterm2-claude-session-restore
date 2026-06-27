@@ -71,11 +71,22 @@ say "Wiring \`cc\` into $ZSHRC"
 if grep -Fqs "$SOURCE_LINE" "$ZSHRC" 2>/dev/null; then
   say "  already sourced"
 else
+  # Optionally set CC_ARGS: default flags applied to every `cc` launch, including
+  # the daemon's automatic restore (e.g. --enable-auto-mode). Interactive only.
+  args_line=""
+  if [[ -t 0 ]] && ! grep -Fqs "export CC_ARGS=" "$ZSHRC" 2>/dev/null; then
+    printf '    Default flags for every \`cc\` launch (CC_ARGS), e.g. --enable-auto-mode\n'
+    printf '    [blank = none]: '
+    read -r cc_args || true
+    [[ -n "$cc_args" ]] && args_line="export CC_ARGS=\"$cc_args\""
+  fi
   {
     printf '\n# cc-tabs: resume Claude Code per iTerm2 tab\n'
+    [[ -n "$args_line" ]] && printf '%s\n' "$args_line"
     printf '%s\n' "$SOURCE_LINE"
   } >> "$ZSHRC"
-  say "  -> appended source line (open a new shell to pick it up)"
+  say "  -> appended to ~/.zshrc (open a new shell to pick it up)"
+  [[ -n "$args_line" ]] && say "  -> CC_ARGS set to: $cc_args"
 fi
 
 # 3. Claude Code plugin -------------------------------------------------------

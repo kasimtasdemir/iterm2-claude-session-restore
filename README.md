@@ -59,6 +59,10 @@ Then, inside Claude Code, install the hook plugin (`cc-tabs` is the plugin's nam
 `/reload-plugins` activates the SessionStart hook in the current session (the
 install command prompts you to run it). New sessions pick it up automatically.
 
+> During `install.sh` you'll be asked for optional default flags (`CC_ARGS`) to
+> apply to every `cc` launch — handy if you always start Claude a certain way
+> (e.g. `--enable-auto-mode`). Leave blank for none; see [Usage](#usage).
+
 ### Prerequisites
 
 `install.sh` handles two of these for you: it **detects iTerm2 Shell Integration
